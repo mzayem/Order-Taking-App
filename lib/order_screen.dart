@@ -233,9 +233,14 @@ class _OrderScreenState extends State<OrderScreen> {
                   child: ElevatedButton(
                     onPressed: _cancelOrder,
                     style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.red[400]),
-                    child: const Text("Cancel",
-                        style: TextStyle(color: Colors.white)),
+                      backgroundColor: Colors.red[400],
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      elevation: 3,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                    child: const Text("Cancel", style: TextStyle(fontSize: 16)),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -243,19 +248,29 @@ class _OrderScreenState extends State<OrderScreen> {
                   child: ElevatedButton(
                     onPressed: () => _saveOrderAs("Draft"),
                     style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blue[300]),
-                    child: const Text("Draft",
-                        style: TextStyle(color: Colors.white)),
+                      backgroundColor: Colors.blue[300],
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      elevation: 3,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                    child: const Text("Draft", style: TextStyle(fontSize: 16)),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: ElevatedButton(
                     onPressed: () => _saveOrderAs("Order"),
-                    style:
-                        ElevatedButton.styleFrom(backgroundColor: Colors.black),
-                    child: const Text("Save",
-                        style: TextStyle(color: Colors.white)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.black,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      elevation: 3,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                    child: const Text("Save", style: TextStyle(fontSize: 16)),
                   ),
                 ),
               ],

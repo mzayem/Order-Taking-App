@@ -23,7 +23,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   final List<Widget> _screens = [
-    const OverviewScreen(), // ✅ this is your existing home logic
+    const OverviewScreen(),
     const OrderScreen(),
     const CashScreen(),
     const ReturnScreen(),
@@ -69,7 +69,6 @@ class OverviewScreen extends StatefulWidget {
 class _OverviewScreenState extends State<OverviewScreen> {
   String selectedFilter = "All";
 
-  // simple date formatter: 19 Jul
   String _formatDate(DateTime dt) {
     final months = [
       "Jan",
@@ -108,7 +107,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
       backgroundColor: Colors.grey[100],
       appBar: AppBar(
         title: const Text("Overview"),
-        backgroundColor: Colors.white,
+        backgroundColor: Colors.black,
         elevation: 0,
         foregroundColor: Colors.black,
       ),
@@ -321,17 +320,17 @@ class _OverviewScreenState extends State<OverviewScreen> {
                     // type chip(s)
                     Row(
                       children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Colors.black,
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: const Text("Type",
-                              style:
-                                  TextStyle(color: Colors.white, fontSize: 12)),
-                        ),
+                        // Container(
+                        //   padding: const EdgeInsets.symmetric(
+                        //       horizontal: 8, vertical: 4),
+                        //   decoration: BoxDecoration(
+                        //     color: Colors.black,
+                        //     borderRadius: BorderRadius.circular(6),
+                        //   ),
+                        //   child: const Text("Type",
+                        //       style:
+                        //           TextStyle(color: Colors.white, fontSize: 12)),
+                        // ),
                         const SizedBox(width: 8),
                         Container(
                           padding: const EdgeInsets.symmetric(
