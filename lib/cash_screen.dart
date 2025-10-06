@@ -1,6 +1,5 @@
-// lib/cash_screen.dart
 import 'package:flutter/material.dart';
-import 'home_screen.dart'; // uses the global savedOrders list from home_screen.dart
+import 'home_screen.dart'; // uses the global savedOrders list
 
 class CashScreen extends StatefulWidget {
   const CashScreen({super.key});
@@ -24,42 +23,42 @@ class _CashScreenState extends State<CashScreen> {
   int? _parseAmount() {
     final text = amountController.text.trim();
     if (text.isEmpty) return null;
-    final value = int.tryParse(text);
-    return value;
+    return int.tryParse(text);
   }
 
   void _saveAs(String type) {
     final amount = _parseAmount();
     if (selectedCustomer == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Please select a customer")));
+        const SnackBar(content: Text("Please select a customer")),
+      );
       return;
     }
     if (amount == null || amount <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Please enter a valid amount")));
+        const SnackBar(content: Text("Please enter a valid amount")),
+      );
       return;
     }
 
     savedOrders.add({
       "customer": selectedCustomer!,
-      "products": <Map<String, dynamic>>[], // no products for cash entry
+      "products": <Map<String, dynamic>>[],
       "total": amount,
       "date": DateTime.now(),
-      "type": type, // "Cash" or "Draft"
-      "town": "", // placeholder — you can add a town input later
+      "type": type,
+      "town": "",
     });
 
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text("Saved as $type")));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Saved as $type")),
+    );
 
-    // clear form for next input
     _clearForm();
   }
 
   @override
   Widget build(BuildContext context) {
-    // input decoration reused
     InputDecoration inputDecoration(String label) => InputDecoration(
           labelText: label,
           filled: true,
@@ -77,13 +76,12 @@ class _CashScreenState extends State<CashScreen> {
         );
 
     return Scaffold(
-      // Note: in your app the main AppBar may be provided by the parent Home scaffold.
-      // Keeping a local AppBar here will show a header when this screen is pushed standalone.
+      backgroundColor: Colors.white,
       appBar: AppBar(
         title: const Text("Cash"),
         centerTitle: true,
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
         elevation: 0,
       ),
       body: SafeArea(
@@ -93,17 +91,56 @@ class _CashScreenState extends State<CashScreen> {
             children: [
               const SizedBox(height: 20),
 
-              // Customer dropdown
-              DropdownButtonFormField<String>(
-                value: selectedCustomer,
-                decoration: inputDecoration("Select Customers"),
-                items: customers
-                    .map((c) => DropdownMenuItem<String>(
-                          value: c,
-                          child: Text(c),
-                        ))
-                    .toList(),
-                onChanged: (val) => setState(() => selectedCustomer = val),
+              // ✅ Searchable Customer Field
+              Autocomplete<String>(
+                optionsBuilder: (TextEditingValue textEditingValue) {
+                  if (textEditingValue.text.isEmpty) {
+                    return const Iterable<String>.empty();
+                  }
+                  return customers.where((String option) {
+                    return option
+                        .toLowerCase()
+                        .contains(textEditingValue.text.toLowerCase());
+                  });
+                },
+                onSelected: (String selection) {
+                  setState(() {
+                    selectedCustomer = selection;
+                  });
+                },
+                fieldViewBuilder:
+                    (context, controller, focusNode, onEditingComplete) {
+                  controller.text = selectedCustomer ?? '';
+                  return TextField(
+                    controller: controller,
+                    focusNode: focusNode,
+                    onEditingComplete: onEditingComplete,
+                    decoration: inputDecoration("Select Customer"),
+                  );
+                },
+                optionsViewBuilder: (context, onSelected, options) {
+                  return Align(
+                    alignment: Alignment.topLeft,
+                    child: Material(
+                      elevation: 4,
+                      borderRadius: BorderRadius.circular(8),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 200),
+                        child: ListView.builder(
+                          padding: EdgeInsets.zero,
+                          itemCount: options.length,
+                          itemBuilder: (BuildContext context, int index) {
+                            final option = options.elementAt(index);
+                            return ListTile(
+                              title: Text(option),
+                              onTap: () => onSelected(option),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  );
+                },
               ),
 
               const SizedBox(height: 20),
@@ -117,26 +154,24 @@ class _CashScreenState extends State<CashScreen> {
 
               const SizedBox(height: 28),
 
-              // Center helper text
               const Center(
                 child: Text(
                   "Enter Amount you received",
                   style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.black54),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black54,
+                  ),
                 ),
               ),
 
-              // spacer to push bottom buttons down but keep scrollable room
               const Spacer(),
 
-              // Action buttons row (Cancel, Draft, Save)
+              // Action buttons
               Padding(
                 padding: const EdgeInsets.only(bottom: 14.0),
                 child: Row(
                   children: [
-                    // Cancel
                     Expanded(
                       child: ElevatedButton(
                         onPressed: _clearForm,
@@ -153,8 +188,6 @@ class _CashScreenState extends State<CashScreen> {
                       ),
                     ),
                     const SizedBox(width: 12),
-
-                    // Draft
                     Expanded(
                       child: ElevatedButton(
                         onPressed: () => _saveAs("Draft"),
@@ -171,8 +204,6 @@ class _CashScreenState extends State<CashScreen> {
                       ),
                     ),
                     const SizedBox(width: 12),
-
-                    // Save
                     Expanded(
                       child: ElevatedButton(
                         onPressed: () => _saveAs("Cash"),
@@ -191,8 +222,6 @@ class _CashScreenState extends State<CashScreen> {
                   ],
                 ),
               ),
-
-              // safe bottom padding for device bottom nav
               SizedBox(height: MediaQuery.of(context).padding.bottom),
             ],
           ),

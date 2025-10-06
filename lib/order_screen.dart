@@ -9,7 +9,7 @@ class OrderScreen extends StatefulWidget {
 }
 
 class _OrderScreenState extends State<OrderScreen> {
-  final List<String> customers = ["Ali", "Ahmed", "Sara"];
+  final List<String> customers = ["Ali", "Ahmed", "Sara", "Salman", "Ayesha"];
   final List<Map<String, dynamic>> products = [
     {"name": "Product A", "price": 100, "availableQty": 50},
     {"name": "Product B", "price": 200, "availableQty": 30},
@@ -27,13 +27,15 @@ class _OrderScreenState extends State<OrderScreen> {
       final qty = int.tryParse(qtyController.text) ?? 0;
       if (qty <= 0) {
         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Enter a valid quantity")));
+          const SnackBar(content: Text("Enter a valid quantity")),
+        );
         return;
       }
       final available = selectedProduct!['availableQty'] as int;
       if (qty > available) {
         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Quantity exceeds available stock")));
+          const SnackBar(content: Text("Quantity exceeds available stock")),
+        );
         return;
       }
 
@@ -47,30 +49,31 @@ class _OrderScreenState extends State<OrderScreen> {
           "price": price,
           "total": total,
         });
-        // optionally reduce availableQty locally for user's UX:
         selectedProduct!['availableQty'] = available - qty;
         qtyController.clear();
         selectedProduct = null;
       });
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Select product and enter quantity")));
+        const SnackBar(content: Text("Select product and enter quantity")),
+      );
     }
   }
 
   int get totalAmount =>
       selectedProducts.fold(0, (sum, item) => sum + (item['total'] as int));
 
-  // Save as given type: "Order" or "Draft"
   void _saveOrderAs(String type) {
     if (selectedCustomer == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Please select a customer")));
+        const SnackBar(content: Text("Please select a customer")),
+      );
       return;
     }
     if (selectedProducts.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Add at least one product")));
+        const SnackBar(content: Text("Add at least one product")),
+      );
       return;
     }
 
@@ -80,10 +83,9 @@ class _OrderScreenState extends State<OrderScreen> {
       "total": totalAmount,
       "date": DateTime.now(),
       "type": type,
-      "town": "Town", // replace with real town if available
+      "town": "Town",
     });
 
-    // clear local form
     setState(() {
       selectedCustomer = null;
       selectedProduct = null;
@@ -107,39 +109,79 @@ class _OrderScreenState extends State<OrderScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.white,
       appBar: AppBar(
+        centerTitle: true,
         title: const Text("Order"),
         backgroundColor: Colors.black,
-        elevation: 0,
         foregroundColor: Colors.white,
+        elevation: 0,
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Customer
-            DropdownButtonFormField<String>(
-              value: selectedCustomer,
-              decoration: const InputDecoration(labelText: "Select Customer"),
-              items: customers
-                  .map((c) => DropdownMenuItem(value: c, child: Text(c)))
-                  .toList(),
-              onChanged: (val) => setState(() => selectedCustomer = val),
+            // ✅ Customer Autocomplete
+            const Text("Select Customer",
+                style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            Autocomplete<String>(
+              optionsBuilder: (TextEditingValue textEditingValue) {
+                if (textEditingValue.text.isEmpty) {
+                  return const Iterable<String>.empty();
+                }
+                return customers.where((customer) => customer
+                    .toLowerCase()
+                    .contains(textEditingValue.text.toLowerCase()));
+              },
+              onSelected: (selection) {
+                setState(() => selectedCustomer = selection);
+              },
+              fieldViewBuilder:
+                  (context, controller, focusNode, onFieldSubmitted) {
+                controller.text = selectedCustomer ?? '';
+                return TextField(
+                  controller: controller,
+                  focusNode: focusNode,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    hintText: "Search Customer...",
+                  ),
+                );
+              },
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 20),
 
-            // Product
-            DropdownButtonFormField<Map<String, dynamic>>(
-              value: selectedProduct,
-              decoration: const InputDecoration(labelText: "Select Product"),
-              items: products
-                  .map((p) => DropdownMenuItem(
-                      value: p,
-                      child: Text(
-                          "${p['name']} - Rs.${p['price']} (${p['availableQty']} pcs)")))
-                  .toList(),
-              onChanged: (val) => setState(() => selectedProduct = val),
+            // ✅ Product Autocomplete
+            const Text("Select Product",
+                style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            Autocomplete<Map<String, dynamic>>(
+              displayStringForOption: (option) => option['name'],
+              optionsBuilder: (TextEditingValue textEditingValue) {
+                if (textEditingValue.text.isEmpty) {
+                  return const Iterable<Map<String, dynamic>>.empty();
+                }
+                return products.where((p) => p['name']
+                    .toLowerCase()
+                    .contains(textEditingValue.text.toLowerCase()));
+              },
+              onSelected: (selection) {
+                setState(() => selectedProduct = selection);
+              },
+              fieldViewBuilder:
+                  (context, controller, focusNode, onFieldSubmitted) {
+                controller.text = selectedProduct?['name'] ?? '';
+                return TextField(
+                  controller: controller,
+                  focusNode: focusNode,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    hintText: "Search Product...",
+                  ),
+                );
+              },
             ),
             const SizedBox(height: 16),
 
@@ -149,7 +191,10 @@ class _OrderScreenState extends State<OrderScreen> {
                 Expanded(
                   child: TextField(
                     controller: qtyController,
-                    decoration: const InputDecoration(labelText: "QTY"),
+                    decoration: const InputDecoration(
+                      labelText: "QTY",
+                      border: OutlineInputBorder(),
+                    ),
                     keyboardType: TextInputType.number,
                   ),
                 ),
@@ -158,10 +203,11 @@ class _OrderScreenState extends State<OrderScreen> {
                   child: TextField(
                     readOnly: true,
                     decoration: InputDecoration(
-                      labelText: "Available QTY",
+                      // labelText: "Available QTY",
+                      border: const OutlineInputBorder(),
                       hintText: selectedProduct != null
                           ? selectedProduct!['availableQty'].toString()
-                          : "-",
+                          : "Available QTY",
                     ),
                   ),
                 ),
@@ -182,7 +228,7 @@ class _OrderScreenState extends State<OrderScreen> {
 
             const SizedBox(height: 20),
 
-            // selected products - scrollable
+            // selected products
             if (selectedProducts.isNotEmpty) ...[
               const Text("Selected Products",
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
@@ -207,9 +253,7 @@ class _OrderScreenState extends State<OrderScreen> {
                         trailing: IconButton(
                           icon: const Icon(Icons.delete, color: Colors.red),
                           onPressed: () {
-                            setState(() {
-                              selectedProducts.removeAt(i);
-                            });
+                            setState(() => selectedProducts.removeAt(i));
                           },
                         ),
                       ),
@@ -225,7 +269,7 @@ class _OrderScreenState extends State<OrderScreen> {
                     const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 18),
 
-            // action buttons: Cancel | Draft | Save
+            // buttons row
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [

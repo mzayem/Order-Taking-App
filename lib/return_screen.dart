@@ -1,4 +1,3 @@
-// lib/return_screen.dart
 import 'package:flutter/material.dart';
 import 'home_screen.dart'; // uses the global savedOrders list
 
@@ -17,7 +16,6 @@ class _ReturnScreenState extends State<ReturnScreen> {
     {"name": "Product C", "price": 150, "availableQty": 20},
   ];
 
-  /// Dummy batch data (simulate API): productName -> list of valid batch ids
   final Map<String, List<String>> productBatches = {
     "Product A": ["A-1001", "A-1002", "A-1003"],
     "Product B": ["B-2001", "B-2002"],
@@ -32,7 +30,6 @@ class _ReturnScreenState extends State<ReturnScreen> {
 
   List<Map<String, dynamic>> selectedProducts = [];
 
-  // Add product to selectedProducts after validation
   void addProduct() {
     if (selectedCustomer == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -63,7 +60,6 @@ class _ReturnScreenState extends State<ReturnScreen> {
     final productName = selectedProduct!['name'] as String;
     final allowedBatches = productBatches[productName] ?? [];
 
-    // Check batch validity (dummy API replacement)
     if (!allowedBatches.contains(batchText)) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("This batch is not from our company")));
@@ -87,17 +83,14 @@ class _ReturnScreenState extends State<ReturnScreen> {
         "price": selectedProduct!['price'],
       });
 
-      // Optionally adjust available qty locally for UX
       selectedProduct!['availableQty'] = available - qty;
 
-      // reset product-specific fields but keep customer selected
       selectedProduct = null;
       qtyController.clear();
       batchController.clear();
     });
   }
 
-  // Cancel/clear form
   void cancel() {
     setState(() {
       selectedCustomer = null;
@@ -109,7 +102,6 @@ class _ReturnScreenState extends State<ReturnScreen> {
     });
   }
 
-  // Save as Return or Draft
   void saveAs(String type) {
     if (selectedCustomer == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -130,15 +122,14 @@ class _ReturnScreenState extends State<ReturnScreen> {
       "products": List<Map<String, dynamic>>.from(selectedProducts),
       "total": total,
       "date": DateTime.now(),
-      "type": type, // "Return" or "Draft"
-      "town": "", // placeholder
+      "type": type,
+      "town": "",
       "remark": remarksController.text.trim(),
     });
 
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text("Saved as $type")));
 
-    // clear form for next input (but keep customer optional — here we clear it)
     setState(() {
       selectedCustomer = null;
       selectedProduct = null;
@@ -157,7 +148,6 @@ class _ReturnScreenState extends State<ReturnScreen> {
     super.dispose();
   }
 
-  // small input decoration for consistent UI
   InputDecoration _inputDecoration(String label) => InputDecoration(
         labelText: label,
         filled: true,
@@ -175,11 +165,12 @@ class _ReturnScreenState extends State<ReturnScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.white,
       appBar: AppBar(
         title: const Text("Return"),
         centerTitle: true,
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
         elevation: 0,
       ),
       body: SafeArea(
@@ -189,35 +180,85 @@ class _ReturnScreenState extends State<ReturnScreen> {
             children: [
               const SizedBox(height: 18),
 
-              // Customer dropdown
-              DropdownButtonFormField<String>(
-                value: selectedCustomer,
-                decoration: _inputDecoration("Select Customers"),
-                items: customers
-                    .map((c) => DropdownMenuItem(value: c, child: Text(c)))
-                    .toList(),
-                onChanged: (val) => setState(() => selectedCustomer = val),
+              /// ✅ Customer - Autocomplete
+              Autocomplete<String>(
+                initialValue: selectedCustomer != null
+                    ? TextEditingValue(text: selectedCustomer!)
+                    : const TextEditingValue(),
+                optionsBuilder: (TextEditingValue textEditingValue) {
+                  if (textEditingValue.text.isEmpty) {
+                    return customers;
+                  }
+                  return customers.where((String option) {
+                    return option
+                        .toLowerCase()
+                        .contains(textEditingValue.text.toLowerCase());
+                  });
+                },
+                fieldViewBuilder:
+                    (context, controller, focusNode, onEditingComplete) {
+                  return TextFormField(
+                    controller: controller,
+                    focusNode: focusNode,
+                    onEditingComplete: onEditingComplete,
+                    decoration: _inputDecoration("Select Customer"),
+                    onChanged: (val) {
+                      setState(() {
+                        selectedCustomer = val;
+                      });
+                    },
+                  );
+                },
+                onSelected: (String selection) {
+                  setState(() {
+                    selectedCustomer = selection;
+                  });
+                },
               ),
 
               const SizedBox(height: 16),
 
-              // Product dropdown
-              DropdownButtonFormField<Map<String, dynamic>>(
-                value: selectedProduct,
-                decoration: _inputDecoration("Select Product"),
-                items: products
-                    .map((p) => DropdownMenuItem(
-                          value: p,
-                          child: Text(
-                              "${p['name']}  (Available: ${p['availableQty']})"),
-                        ))
-                    .toList(),
-                onChanged: (val) => setState(() => selectedProduct = val),
+              /// ✅ Product - Autocomplete
+              Autocomplete<Map<String, dynamic>>(
+                initialValue: selectedProduct != null
+                    ? TextEditingValue(text: selectedProduct!['name'])
+                    : const TextEditingValue(),
+                optionsBuilder: (TextEditingValue textEditingValue) {
+                  if (textEditingValue.text.isEmpty) {
+                    return products;
+                  }
+                  return products.where((p) => p['name']
+                      .toLowerCase()
+                      .contains(textEditingValue.text.toLowerCase()));
+                },
+                displayStringForOption: (p) =>
+                    "${p['name']}  (Available: ${p['availableQty']})",
+                fieldViewBuilder:
+                    (context, controller, focusNode, onEditingComplete) {
+                  return TextFormField(
+                    controller: controller,
+                    focusNode: focusNode,
+                    onEditingComplete: onEditingComplete,
+                    decoration: _inputDecoration("Select Product"),
+                    onChanged: (val) {
+                      final found = products.firstWhere(
+                          (p) => p['name'].toLowerCase() == val.toLowerCase(),
+                          orElse: () => {});
+                      setState(() {
+                        selectedProduct = found.isNotEmpty ? found : null;
+                      });
+                    },
+                  );
+                },
+                onSelected: (p) {
+                  setState(() {
+                    selectedProduct = p;
+                  });
+                },
               ),
 
               const SizedBox(height: 16),
 
-              // QTY and Batch No
               Row(
                 children: [
                   Expanded(
@@ -239,7 +280,6 @@ class _ReturnScreenState extends State<ReturnScreen> {
 
               const SizedBox(height: 12),
 
-              // Remarks
               TextField(
                 controller: remarksController,
                 decoration: _inputDecoration("Remarks"),
@@ -248,7 +288,6 @@ class _ReturnScreenState extends State<ReturnScreen> {
 
               const SizedBox(height: 18),
 
-              // Add product button
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
@@ -262,7 +301,6 @@ class _ReturnScreenState extends State<ReturnScreen> {
 
               const SizedBox(height: 18),
 
-              // Selected products list
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -309,7 +347,6 @@ class _ReturnScreenState extends State<ReturnScreen> {
                 ),
               ),
 
-              // Buttons row
               Padding(
                 padding: const EdgeInsets.only(bottom: 8.0, top: 8),
                 child: Row(
@@ -358,7 +395,6 @@ class _ReturnScreenState extends State<ReturnScreen> {
                   ],
                 ),
               ),
-
               SizedBox(height: MediaQuery.of(context).padding.bottom),
             ],
           ),
