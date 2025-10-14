@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'home_screen.dart'; // savedOrders list is here
+import 'package:dmc/db/database.dart';
 
 class OrderScreen extends StatefulWidget {
   const OrderScreen({super.key});
@@ -63,7 +63,7 @@ class _OrderScreenState extends State<OrderScreen> {
   int get totalAmount =>
       selectedProducts.fold(0, (sum, item) => sum + (item['total'] as int));
 
-  void _saveOrderAs(String type) {
+  void _saveOrderAs(String type) async {
     if (selectedCustomer == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Please select a customer")),
@@ -77,14 +77,29 @@ class _OrderScreenState extends State<OrderScreen> {
       return;
     }
 
-    savedOrders.add({
-      "customer": selectedCustomer!,
-      "products": List<Map<String, dynamic>>.from(selectedProducts),
-      "total": totalAmount,
-      "date": DateTime.now(),
-      "type": type,
-      "town": "Town",
-    });
+    // Ensure customer exists
+    final custId =
+        await AppDatabase.insertCustomerIfNotExists(selectedCustomer!);
+
+    final details = <Map<String, dynamic>>[];
+    for (final p in selectedProducts) {
+      final prodId = await AppDatabase.insertProductIfNotExists(p['name'],
+          unitPrice: (p['price'] as num).toDouble(), availableQty: 0);
+      details.add({
+        'productId': prodId,
+        'qty': p['qty'],
+        'unitPrice': (p['price'] as num).toDouble(),
+      });
+    }
+
+    final txnId = await AppDatabase.createTransactionWithDetails(
+      customerId: custId,
+      type: type,
+      details: details,
+    );
+
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Order saved (local) id: $txnId")));
 
     setState(() {
       selectedCustomer = null;
@@ -92,9 +107,6 @@ class _OrderScreenState extends State<OrderScreen> {
       selectedProducts = [];
       qtyController.clear();
     });
-
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text("Order saved as $type")));
   }
 
   void _cancelOrder() {
@@ -104,6 +116,12 @@ class _OrderScreenState extends State<OrderScreen> {
       selectedProducts.clear();
       qtyController.clear();
     });
+  }
+
+  @override
+  void dispose() {
+    qtyController.dispose();
+    super.dispose();
   }
 
   @override
@@ -122,7 +140,6 @@ class _OrderScreenState extends State<OrderScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ✅ Customer Autocomplete
             const Text("Select Customer",
                 style: TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 6),
@@ -152,8 +169,6 @@ class _OrderScreenState extends State<OrderScreen> {
               },
             ),
             const SizedBox(height: 20),
-
-            // ✅ Product Autocomplete
             const Text("Select Product",
                 style: TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 6),
@@ -184,8 +199,6 @@ class _OrderScreenState extends State<OrderScreen> {
               },
             ),
             const SizedBox(height: 16),
-
-            // qty & available
             Row(
               children: [
                 Expanded(
@@ -203,7 +216,6 @@ class _OrderScreenState extends State<OrderScreen> {
                   child: TextField(
                     readOnly: true,
                     decoration: InputDecoration(
-                      // labelText: "Available QTY",
                       border: const OutlineInputBorder(),
                       hintText: selectedProduct != null
                           ? selectedProduct!['availableQty'].toString()
@@ -214,8 +226,6 @@ class _OrderScreenState extends State<OrderScreen> {
               ],
             ),
             const SizedBox(height: 16),
-
-            // Add button
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
@@ -225,10 +235,7 @@ class _OrderScreenState extends State<OrderScreen> {
                     style: TextStyle(color: Colors.white)),
               ),
             ),
-
             const SizedBox(height: 20),
-
-            // selected products
             if (selectedProducts.isNotEmpty) ...[
               const Text("Selected Products",
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
@@ -262,14 +269,11 @@ class _OrderScreenState extends State<OrderScreen> {
                 ),
               ),
             ],
-
             const SizedBox(height: 16),
             Text("Total Amount: Rs.$totalAmount",
                 style:
                     const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 18),
-
-            // buttons row
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [

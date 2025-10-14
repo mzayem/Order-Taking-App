@@ -38,6 +38,9 @@ dependencies:
   dropdown_search: 
   shared_preferences: ^2.2.3
   dropdown_textfield:
+  sqflite: 
+  path:
+  http:
 dev_dependencies:
   flutter_test:
     sdk: flutter

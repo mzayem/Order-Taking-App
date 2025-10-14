@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'home_screen.dart'; // uses the global savedOrders list
+import 'package:dmc/db/database.dart';
 
 class ReturnScreen extends StatefulWidget {
   const ReturnScreen({super.key});
@@ -102,7 +102,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
     });
   }
 
-  void saveAs(String type) {
+  void saveAs(String type) async {
     if (selectedCustomer == null) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Please select customer")));
@@ -114,21 +114,30 @@ class _ReturnScreenState extends State<ReturnScreen> {
       return;
     }
 
-    final total = selectedProducts.fold<int>(
-        0, (s, p) => s + ((p['qty'] as int) * (p['price'] as int)));
+    final custId =
+        await AppDatabase.insertCustomerIfNotExists(selectedCustomer!);
 
-    savedOrders.add({
-      "customer": selectedCustomer!,
-      "products": List<Map<String, dynamic>>.from(selectedProducts),
-      "total": total,
-      "date": DateTime.now(),
-      "type": type,
-      "town": "",
-      "remark": remarksController.text.trim(),
-    });
+    final details = <Map<String, dynamic>>[];
+    for (final p in selectedProducts) {
+      final prodId = await AppDatabase.insertProductIfNotExists(p['name'],
+          unitPrice: (p['price'] as num).toDouble(), availableQty: 0);
+      details.add({
+        'productId': prodId,
+        'batchNo': p['batch'],
+        'qty': p['qty'],
+        'unitPrice': (p['price'] as num).toDouble(),
+      });
+    }
 
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text("Saved as $type")));
+    final txnId = await AppDatabase.createTransactionWithDetails(
+      customerId: custId,
+      type: type,
+      details: details,
+      remarks: remarksController.text.trim(),
+    );
+
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Saved as $type (local) id: $txnId")));
 
     setState(() {
       selectedCustomer = null;
@@ -179,8 +188,6 @@ class _ReturnScreenState extends State<ReturnScreen> {
           child: Column(
             children: [
               const SizedBox(height: 18),
-
-              /// ✅ Customer - Autocomplete
               Autocomplete<String>(
                 initialValue: selectedCustomer != null
                     ? TextEditingValue(text: selectedCustomer!)
@@ -215,10 +222,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
                   });
                 },
               ),
-
               const SizedBox(height: 16),
-
-              /// ✅ Product - Autocomplete
               Autocomplete<Map<String, dynamic>>(
                 initialValue: selectedProduct != null
                     ? TextEditingValue(text: selectedProduct!['name'])
@@ -256,9 +260,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
                   });
                 },
               ),
-
               const SizedBox(height: 16),
-
               Row(
                 children: [
                   Expanded(
@@ -277,17 +279,13 @@ class _ReturnScreenState extends State<ReturnScreen> {
                   ),
                 ],
               ),
-
               const SizedBox(height: 12),
-
               TextField(
                 controller: remarksController,
                 decoration: _inputDecoration("Remarks"),
                 maxLines: 2,
               ),
-
               const SizedBox(height: 18),
-
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
@@ -298,9 +296,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
                       style: TextStyle(color: Colors.white)),
                 ),
               ),
-
               const SizedBox(height: 18),
-
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -346,7 +342,6 @@ class _ReturnScreenState extends State<ReturnScreen> {
                   ],
                 ),
               ),
-
               Padding(
                 padding: const EdgeInsets.only(bottom: 8.0, top: 8),
                 child: Row(

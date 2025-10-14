@@ -1,13 +1,16 @@
-// lib/home_screen.dart
-import 'dart:async';
+// lib/screens/home_screen.dart
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+// Screens
 import 'order_screen.dart';
 import 'cash_screen.dart';
 import 'return_screen.dart';
 import 'profile_screen.dart';
 
-/// Global saved orders list (other screens add to this list)
-List<Map<String, dynamic>> savedOrders = [];
+// Local database + Sync
+import '../db/database.dart';
+import '../sync/sync_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -27,11 +30,7 @@ class _HomeScreenState extends State<HomeScreen> {
     ProfileScreen(),
   ];
 
-  void _onItemTapped(int index) {
-    setState(() {
-      _selectedIndex = index;
-    });
-  }
+  void _onItemTapped(int index) => setState(() => _selectedIndex = index);
 
   @override
   Widget build(BuildContext context) {
@@ -60,9 +59,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-/// -------------------------
-/// OverviewScreen (Home tab)
-/// -------------------------
+/// -------------------- OVERVIEW TAB -------------------- ///
 class OverviewScreen extends StatefulWidget {
   const OverviewScreen({super.key});
 
@@ -72,16 +69,176 @@ class OverviewScreen extends StatefulWidget {
 
 class _OverviewScreenState extends State<OverviewScreen> {
   String selectedFilter = "All";
-
-  // selection/upload state
   bool _selectionMode = false;
-  final Set<int> _selectedIndexes = {};
-
   bool _isUploading = false;
   double _uploadProgress = 0.0;
 
+  final Set<int> _selectedTxIds = {};
+  List<Map<String, dynamic>> _transactions = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTransactions();
+  }
+
+  Future<void> _loadTransactions() async {
+    try {
+      final db = await AppDatabase.init();
+      final rows = await AppDatabase.getAllTransactionsForOverview();
+      final List<Map<String, dynamic>> items = [];
+
+      for (final r in rows) {
+        print("Loaded Transaction Row: $r"); // 👈 DEBUG PRINT
+
+        // dummy customer data if API not fetched yet
+        final custRows = await db.query(
+          'Customer',
+          where: 'CustomerID = ?',
+          whereArgs: [r['CustomerID']],
+          limit: 1,
+        );
+        final custName = custRows.isNotEmpty
+            ? custRows.first['Name'] as String
+            : 'Customer #${r['CustomerID']}';
+
+        // use correct total depending on type
+        final type = r['Type'] as String? ?? 'Order';
+        final totalAmount = (r['TotalAmount'] ?? 0) as num;
+        final cashAmount = (r['CashAmount'] ?? 0) as num;
+
+        items.add({
+          'transactionId': r['TransactionID'] as int,
+          'customer': custName,
+          'date':
+              DateTime.tryParse(r['Date'] as String? ?? '') ?? DateTime.now(),
+          'total': type == 'Cash' ? cashAmount.toInt() : totalAmount.toInt(),
+          'type': type,
+          'syncStatus': r['SyncStatus'] as String? ?? 'Pending',
+          'uploadedAt': r['SyncStatus'] == 'Synced'
+              ? DateTime.tryParse(r['UpdatedAt'] as String? ?? '')
+              : null,
+          'town': '',
+        });
+      }
+
+      if (!mounted) return;
+      setState(() => _transactions = items);
+    } catch (e) {
+      debugPrint('Error loading transactions: $e');
+    }
+  }
+
+  Future<void> _uploadSelected() async {
+    if (_selectedTxIds.isEmpty) return;
+    setState(() {
+      _isUploading = true;
+      _uploadProgress = 0.0;
+    });
+
+    final prefs = await SharedPreferences.getInstance();
+    final baseUrl = prefs.getString('baseUrl') ?? '';
+    final sync = SyncService(baseUrl);
+
+    if (baseUrl.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('API URL not configured.')));
+      setState(() => _isUploading = false);
+      return;
+    }
+
+    final ids = _selectedTxIds.toList();
+    final total = ids.length;
+    int done = 0;
+
+    for (final id in ids) {
+      final rows = await AppDatabase.getTransactionWithDetails(id);
+      if (rows.isEmpty) {
+        done++;
+        setState(() => _uploadProgress = done / total);
+        continue;
+      }
+
+      final header = rows.first;
+      final details = <Map<String, dynamic>>[];
+      for (final r in rows) {
+        if (r['TransactionDetailID'] != null) {
+          details.add({
+            'product_id': r['ProductID'],
+            'batch_no': r['BatchNo'],
+            'qty': r['Qty'],
+            'unit_price': r['UnitPrice'],
+            'total_price': r['TotalPrice'],
+          });
+        }
+      }
+
+      final payload = {
+        'customer_id': header['CustomerID'],
+        'type': header['Type'],
+        'date': header['Date'],
+        'total_amount': header['TotalAmount'],
+        'cash_amount': header['CashAmount'],
+        'remarks': header['Remarks'],
+        'lines': details,
+      };
+
+      final res = await sync.uploadTransaction(id, payload);
+      if (res['ok'] == true) {
+        await AppDatabase.markTransactionSynced(id,
+            remoteId: res['remoteId'] as int?);
+      } else {
+        await AppDatabase.markTransactionFailed(id);
+      }
+
+      done++;
+      setState(() => _uploadProgress = done / total);
+    }
+
+    await _loadTransactions();
+    setState(() {
+      _isUploading = false;
+      _selectionMode = false;
+      _selectedTxIds.clear();
+      _uploadProgress = 0.0;
+    });
+
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text("Upload finished.")));
+  }
+
+  void _toggleSelection(int txnId) {
+    setState(() {
+      if (_selectedTxIds.contains(txnId)) {
+        _selectedTxIds.remove(txnId);
+        if (_selectedTxIds.isEmpty) _selectionMode = false;
+      } else {
+        _selectedTxIds.add(txnId);
+        _selectionMode = true;
+      }
+    });
+  }
+
+  String _shortDate(DateTime dt) {
+    const months = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec"
+    ];
+    return "${dt.day} ${months[dt.month - 1]}";
+  }
+
   String _formatDayDate(DateTime dt) {
-    final weekdays = [
+    const weekdays = [
       "Sunday",
       "Monday",
       "Tuesday",
@@ -90,7 +247,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
       "Friday",
       "Saturday"
     ];
-    final months = [
+    const months = [
       "Jan",
       "Feb",
       "Mar",
@@ -109,142 +266,15 @@ class _OverviewScreenState extends State<OverviewScreen> {
     return "$dayName, ${dt.day} $monthName";
   }
 
-  String _shortDate(DateTime dt) {
-    final months = [
-      "Jan",
-      "Feb",
-      "Mar",
-      "Apr",
-      "May",
-      "Jun",
-      "Jul",
-      "Aug",
-      "Sep",
-      "Oct",
-      "Nov",
-      "Dec"
-    ];
-    return "${dt.day} ${months[dt.month - 1]}";
-  }
-
-  // compute totals (keeps previous behaviour)
-  int _totalOrdersSum() {
-    return savedOrders
-        .where((o) => (o['type'] ?? '') == 'Order')
-        .fold<int>(0, (s, o) => s + (o['total'] as int? ?? 0));
-  }
-
-  int _cashSum() {
-    return savedOrders
-        .where((o) => (o['type'] ?? '') == 'Cash')
-        .fold<int>(0, (s, o) => s + (o['total'] as int? ?? 0));
-  }
-
-  // Toggle selection of a reversed-indexed card (we display reversed list)
-  void _toggleSelection(int savedOrdersIndex) {
-    setState(() {
-      if (_selectedIndexes.contains(savedOrdersIndex)) {
-        _selectedIndexes.remove(savedOrdersIndex);
-        if (_selectedIndexes.isEmpty) _selectionMode = false;
-      } else {
-        _selectedIndexes.add(savedOrdersIndex);
-        _selectionMode = true;
-      }
-    });
-  }
-
-  // Simulates uploading a single order to an API.
-  // Replace this with your real API call when available.
-  Future<bool> _uploadOrderToApi(Map<String, dynamic> order) async {
-    // simulate network latency & small chance of failure
-    await Future.delayed(const Duration(milliseconds: 800));
-    return true; // return true on success, false on failure
-  }
-
-  // Bulk upload selected orders. Marks uploaded: true and sets uploadedAt on success.
-  Future<void> _uploadSelectedOrders() async {
-    if (_selectedIndexes.isEmpty) return;
-
-    setState(() {
-      _isUploading = true;
-      _uploadProgress = 0.0;
-    });
-
-    final indexes = _selectedIndexes.toList();
-    final total = indexes.length;
-    int done = 0;
-
-    // sequential upload so we can show progress; you can convert to parallel if needed
-    for (final idx in indexes) {
-      // defensive: skip if already uploaded
-      if (savedOrders[idx]['uploaded'] == true) {
-        done++;
-        setState(() {
-          _uploadProgress = done / total;
-        });
-        continue;
-      }
-
-      final success = await _uploadOrderToApi(savedOrders[idx]);
-
-      if (success) {
-        savedOrders[idx]['uploaded'] = true;
-        savedOrders[idx]['uploadedAt'] = DateTime.now();
-      } else {
-        // mark failure - user can retry later; here we add a 'uploadFailed' flag
-        savedOrders[idx]['uploadFailed'] = true;
-      }
-
-      done++;
-      setState(() {
-        _uploadProgress = done / total;
-      });
-    }
-
-    // small delay so progress reaches 100% visibly
-    await Future.delayed(const Duration(milliseconds: 250));
-
-    setState(() {
-      _isUploading = false;
-      _selectedIndexes.clear();
-      _selectionMode = false;
-      _uploadProgress = 0.0;
-    });
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Selected orders uploaded (simulated).")),
-    );
-  }
-
-  // Build filter chip
-  Widget _filterButton(String text) {
-    final isSelected = selectedFilter == text;
-    return ChoiceChip(
-      label: Text(text),
-      selected: isSelected,
-      onSelected: (_) => setState(() => selectedFilter = text),
-      selectedColor: Colors.white,
-      backgroundColor: Colors.black,
-      labelStyle: TextStyle(color: isSelected ? Colors.black : Colors.white),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-    );
-  }
-
-  // Build the order card UI (index is index in savedOrders list)
-  Widget _buildOrderCard(
-      Map<String, dynamic> order, int index, int displayIndex) {
-    final String type = (order['type'] ?? 'Order').toString();
-    final colorChip = (type == 'Draft') ? Colors.orange : Colors.black;
-    final uploaded = order['uploaded'] == true;
-    final uploadFailed = order['uploadFailed'] == true;
-
-    final date =
-        order['date'] is DateTime ? order['date'] as DateTime : DateTime.now();
+  Widget _buildOrderCard(Map<String, dynamic> order) {
+    final int txnId = order['transactionId'] as int;
+    final bool uploaded = order['syncStatus'] == 'Synced';
+    final bool uploadFailed = order['syncStatus'] == 'Failed';
+    final bool isSelected = _selectedTxIds.contains(txnId);
+    final type = order['type'] ?? 'Order';
+    final date = order['date'] as DateTime;
     final town = order['town'] ?? '';
     final total = order['total'] ?? 0;
-
-    final isSelected = _selectedIndexes.contains(index);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -255,14 +285,12 @@ class _OverviewScreenState extends State<OverviewScreen> {
           decoration: BoxDecoration(
             color: isSelected ? Colors.teal.withOpacity(0.08) : Colors.white,
             borderRadius: BorderRadius.circular(18),
-            border: isSelected
-                ? Border.all(color: Colors.teal, width: 2)
-                : Border.all(color: Colors.transparent),
+            border:
+                isSelected ? Border.all(color: Colors.teal, width: 2) : null,
           ),
           padding: const EdgeInsets.all(14),
           child: Row(
             children: [
-              // selection checkbox or spacing
               if (_selectionMode)
                 Padding(
                   padding: const EdgeInsets.only(right: 12),
@@ -276,20 +304,17 @@ class _OverviewScreenState extends State<OverviewScreen> {
                 )
               else
                 const SizedBox(width: 6),
-
-              // main content
               Expanded(
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // chips row: type + uploaded indicator
-                    Row(
-                      children: [
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
                         Container(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 10, vertical: 4),
                           decoration: BoxDecoration(
-                            color: colorChip,
+                            color:
+                                type == 'Draft' ? Colors.orange : Colors.black,
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: Text(type,
@@ -302,9 +327,8 @@ class _OverviewScreenState extends State<OverviewScreen> {
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 10, vertical: 4),
                             decoration: BoxDecoration(
-                              color: Colors.green,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
+                                color: Colors.green,
+                                borderRadius: BorderRadius.circular(6)),
                             child: const Text("Uploaded",
                                 style: TextStyle(
                                     color: Colors.white, fontSize: 12)),
@@ -315,55 +339,30 @@ class _OverviewScreenState extends State<OverviewScreen> {
                                 horizontal: 8, vertical: 4),
                             margin: const EdgeInsets.only(left: 8),
                             decoration: BoxDecoration(
-                              color: Colors.red.shade100,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
+                                color: Colors.red.shade100,
+                                borderRadius: BorderRadius.circular(6)),
                             child: const Text("Upload Failed",
                                 style:
                                     TextStyle(color: Colors.red, fontSize: 11)),
                           ),
-                      ],
-                    ),
-
-                    const SizedBox(height: 10),
-
-                    Text(
-                      (order['customer'] ?? 'Customer Name')
-                          .toString()
-                          .toUpperCase(),
-                      style: const TextStyle(
-                          fontSize: 18, fontWeight: FontWeight.bold),
-                    ),
-
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        Text("$town  |  ${_shortDate(date)}",
-                            style: const TextStyle(color: Colors.grey)),
-                        const SizedBox(width: 8),
-                        if (order['uploadedAt'] != null)
-                          Text(
-                              " • ${_shortDate(order['uploadedAt'] as DateTime)}",
-                              style: const TextStyle(
-                                  color: Colors.green, fontSize: 12)),
-                      ],
-                    ),
-                  ],
-                ),
+                      ]),
+                      const SizedBox(height: 10),
+                      Text(order['customer'].toString().toUpperCase(),
+                          style: const TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 6),
+                      Text("$town | ${_shortDate(date)}",
+                          style: const TextStyle(color: Colors.grey)),
+                    ]),
               ),
-
-              // amount column
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text("Rs.$total",
-                      style: const TextStyle(
-                          fontWeight: FontWeight.bold, fontSize: 16)),
-                  const SizedBox(height: 8),
-                  const Text("AMOUNT",
-                      style: TextStyle(color: Colors.grey, fontSize: 11)),
-                ],
-              ),
+              Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                Text("Rs.$total",
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 16)),
+                const SizedBox(height: 8),
+                const Text("AMOUNT",
+                    style: TextStyle(color: Colors.grey, fontSize: 11)),
+              ])
             ],
           ),
         ),
@@ -373,40 +372,41 @@ class _OverviewScreenState extends State<OverviewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // prepare filtered list (display reversed so latest first)
-    final filteredOrders = selectedFilter == "All"
-        ? savedOrders.reversed.toList()
-        : savedOrders.reversed
-            .where((o) => (o['type'] ?? '') == selectedFilter)
-            .toList();
-
-    final headerDate = savedOrders.isNotEmpty
-        ? (savedOrders.last['date'] as DateTime)
+    final headerDate = _transactions.isNotEmpty
+        ? _transactions.first['date'] as DateTime
         : DateTime.now();
 
-    // floating upload FAB shown only when selection mode and at least 1 selected
-    final showUploadFab =
-        _selectionMode && _selectedIndexes.isNotEmpty && !_isUploading;
+    final filtered = selectedFilter == 'All'
+        ? _transactions
+        : _transactions
+            .where((t) => (t['type'] ?? '') == selectedFilter)
+            .toList();
 
+    final showUploadFab =
+        _selectionMode && _selectedTxIds.isNotEmpty && !_isUploading;
+
+    final orderTotal = _transactions.fold<int>(
+        0, (sum, t) => sum + (t['type'] == 'Order' ? (t['total'] as int) : 0));
+    final cashTotal = _transactions.fold<int>(
+        0, (sum, t) => sum + (t['type'] == 'Cash' ? (t['total'] as int) : 0));
+
+    print("Order total: $orderTotal | Cash total: $cashTotal");
     return Scaffold(
       backgroundColor: Colors.grey[100],
       appBar: AppBar(
         title: Text(_selectionMode
-            ? "${_selectedIndexes.length} Selected"
-            : _formatDayDate(headerDate)),
+            ? "${_selectedTxIds.length} Selected"
+            : "Home Screen"),
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
-        elevation: 0,
         actions: [
           if (_selectionMode)
             IconButton(
               icon: const Icon(Icons.close),
-              onPressed: () {
-                setState(() {
-                  _selectionMode = false;
-                  _selectedIndexes.clear();
-                });
-              },
+              onPressed: () => setState(() {
+                _selectionMode = false;
+                _selectedTxIds.clear();
+              }),
             )
         ],
       ),
@@ -417,14 +417,11 @@ class _OverviewScreenState extends State<OverviewScreen> {
               child: SizedBox(
                 width: 56,
                 height: 56,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    CircularProgressIndicator(
-                        value: _uploadProgress, color: Colors.white),
-                    const Icon(Icons.cloud_upload, color: Colors.white),
-                  ],
-                ),
+                child: Stack(alignment: Alignment.center, children: [
+                  CircularProgressIndicator(
+                      value: _uploadProgress, color: Colors.white),
+                  const Icon(Icons.cloud_upload, color: Colors.white)
+                ]),
               ),
             )
           : (showUploadFab
@@ -433,129 +430,105 @@ class _OverviewScreenState extends State<OverviewScreen> {
                   icon: const Icon(Icons.cloud_upload, color: Colors.white),
                   label: const Text("Upload",
                       style: TextStyle(color: Colors.white)),
-                  onPressed: _uploadSelectedOrders,
+                  onPressed: _uploadSelected,
                 )
               : null),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header: title, totals, actions
           Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Row(
-              children: [
-                // left block
-                Expanded(
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text("Overview",
-                            style: TextStyle(
-                                fontSize: 34, fontWeight: FontWeight.w600)),
-                        const SizedBox(height: 6),
-                        Text(_formatDayDate(headerDate),
-                            style: const TextStyle(
-                                fontSize: 16, color: Colors.grey)),
-                        const SizedBox(height: 12),
-                        Row(children: [
-                          const Icon(Icons.shopping_bag_outlined, size: 18),
-                          const SizedBox(width: 6),
-                          Text("Rs.${_totalOrdersSum()}"),
-                          const SizedBox(width: 20),
-                          const Icon(Icons.attach_money, size: 18),
-                          const SizedBox(width: 6),
-                          Text("Rs.${_cashSum()}"),
-                        ])
-                      ]),
-                ),
-
-                // right buttons
-                Column(children: [
-                  ElevatedButton(
-                    onPressed: () {
-                      // placeholder for export logic
-                      ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text("Export placeholder")));
-                    },
+            padding:
+                const EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0),
+            child: Row(children: [
+              Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text("Overview",
+                          style: TextStyle(
+                              fontSize: 34, fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 6),
+                      Text(_formatDayDate(headerDate),
+                          style: const TextStyle(
+                              fontSize: 16, color: Colors.grey)),
+                      const SizedBox(height: 12),
+                      Row(children: [
+                        const Icon(Icons.shopping_bag_outlined, size: 18),
+                        const SizedBox(width: 6),
+                        Text("Rs.$orderTotal"),
+                        const SizedBox(width: 20),
+                        const Icon(Icons.attach_money, size: 18),
+                        const SizedBox(width: 6),
+                        Text("Rs.$cashTotal"),
+                      ])
+                    ]),
+              ),
+              Column(children: [
+                ElevatedButton(
+                    onPressed: () {},
                     style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.green,
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(8))),
                     child: const Text("Export",
-                        style: TextStyle(color: Colors.white)),
-                  ),
-                  const SizedBox(height: 10),
-                  ElevatedButton(
-                    onPressed: () {
-                      setState(() {
-                        savedOrders.clear();
-                        _selectedIndexes.clear();
-                        _selectionMode = false;
-                      });
+                        style: TextStyle(color: Colors.white))),
+                const SizedBox(height: 10),
+                ElevatedButton(
+                    onPressed: () async {
+                      await AppDatabase.deleteDatabaseFile();
+                      await AppDatabase.init();
+                      await _loadTransactions();
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                          content: Text('Local DB reset (dev)')));
                     },
                     style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.red,
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(8))),
                     child: const Text("Clear",
-                        style: TextStyle(color: Colors.white)),
-                  ),
-                ])
-              ],
-            ),
+                        style: TextStyle(color: Colors.white))),
+              ])
+            ]),
           ),
-
-          // Filter chips
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(children: [
-                  _filterButton("All"),
-                  const SizedBox(width: 8),
-                  _filterButton("Draft"),
-                  const SizedBox(width: 8),
-                  _filterButton("Order"),
-                  const SizedBox(width: 8),
-                  _filterButton("Cash"),
-                  const SizedBox(width: 8),
-                  _filterButton("Return"),
-                ])),
+              scrollDirection: Axis.horizontal,
+              child: Row(children: [
+                for (final f in ['All', 'Draft', 'Order', 'Cash', 'Return'])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: ChoiceChip(
+                      label: Text(f),
+                      selected: selectedFilter == f,
+                      onSelected: (_) => setState(() => selectedFilter = f),
+                    ),
+                  ),
+              ]),
+            ),
           ),
-
           const SizedBox(height: 12),
-
-          // Orders list
           Expanded(
-            child: filteredOrders.isEmpty
+            child: filtered.isEmpty
                 ? const Center(
                     child: Text("No Orders Yet",
                         style: TextStyle(color: Colors.grey)))
                 : ListView.builder(
                     padding:
                         const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    itemCount: filteredOrders.length,
-                    itemBuilder: (context, displayIndex) {
-                      // convert displayIndex (reversed list) to savedOrders index
-                      final reversedIndex =
-                          savedOrders.length - 1 - displayIndex;
-                      final order = filteredOrders[displayIndex];
+                    itemCount: filtered.length,
+                    itemBuilder: (context, i) {
+                      final order = filtered[i];
+                      final txnId = order['transactionId'] as int;
                       return GestureDetector(
-                        onLongPress: () {
-                          setState(() {
-                            _selectionMode = true;
-                            _selectedIndexes.add(reversedIndex);
-                          });
-                        },
+                        onLongPress: () => setState(() {
+                          _selectionMode = true;
+                          _selectedTxIds.add(txnId);
+                        }),
                         onTap: () {
-                          if (_selectionMode) {
-                            _toggleSelection(reversedIndex);
-                          } else {
-                            // optional: open order detail
-                          }
+                          if (_selectionMode) _toggleSelection(txnId);
                         },
-                        child:
-                            _buildOrderCard(order, reversedIndex, displayIndex),
+                        child: _buildOrderCard(order),
                       );
                     },
                   ),
