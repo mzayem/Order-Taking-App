@@ -73,19 +73,28 @@ class _LoginScreenState extends State<LoginScreen> {
                               onPressed: () async {
                                 final email = emailController.text.trim();
                                 final password = passwordController.text.trim();
+
                                 if (email.isEmpty || password.isEmpty) {
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                          content: Text(
-                                              "Please enter email and password")));
+                                    const SnackBar(
+                                        content: Text(
+                                            "Please enter email and password")),
+                                  );
                                 } else {
                                   final prefs =
                                       await SharedPreferences.getInstance();
+
+                                  // ✅ Save login info
                                   await prefs.setBool('isLoggedIn', true);
+                                  await prefs.setString('username',
+                                      email); // Save email as username
+
+                                  // ✅ Navigate to Home
                                   Navigator.pushReplacement(
-                                      context,
-                                      MaterialPageRoute(
-                                          builder: (_) => const HomeScreen()));
+                                    context,
+                                    MaterialPageRoute(
+                                        builder: (_) => const HomeScreen()),
+                                  );
                                 }
                               },
                               child: const Text("Login",
