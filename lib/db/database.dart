@@ -1,7 +1,6 @@
 // lib/db/database.dart
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 class AppDatabase {
   static Database? _db;
@@ -13,18 +12,159 @@ class AppDatabase {
 
     _db = await openDatabase(
       path,
-      version: 2, // incremented version for new column (userEmail)
+      version: 1,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON;');
       },
       onCreate: (db, version) async {
-        await _createTables(db);
-      },
-      onUpgrade: (db, oldVersion, newVersion) async {
-        // add userEmail if coming from old db
-        if (oldVersion < 2) {
-          await db
-              .execute('ALTER TABLE "Transaction" ADD COLUMN userEmail TEXT');
+        final statements = <String>[
+          '''
+          CREATE TABLE Customer (
+            CustomerID INTEGER PRIMARY KEY AUTOINCREMENT,
+            Name TEXT NOT NULL UNIQUE,
+            Town TEXT
+          )
+          ''',
+          '''
+          CREATE TABLE "User" (
+            UserID INTEGER PRIMARY KEY AUTOINCREMENT,
+            Name TEXT NOT NULL,
+            Town TEXT,
+            Role TEXT NOT NULL CHECK (Role IN ('Salesman','Customer'))
+          )
+          ''',
+          '''
+          CREATE TABLE Product (
+            ProductID INTEGER PRIMARY KEY AUTOINCREMENT,
+            Name TEXT NOT NULL UNIQUE,
+            Code TEXT,
+            UnitPrice NUMERIC NOT NULL DEFAULT 0.0,
+            AvailableQty INTEGER NOT NULL DEFAULT 0
+          )
+          ''',
+          '''
+          CREATE TABLE "Transaction" (
+            TransactionID INTEGER PRIMARY KEY AUTOINCREMENT,
+            CustomerID INTEGER NOT NULL,
+            Type TEXT NOT NULL CHECK(Type IN ('Order','Return','Cash','Draft')),
+            Date TEXT NOT NULL DEFAULT (datetime('now')),
+            TotalAmount NUMERIC NOT NULL DEFAULT 0.0,
+            CashAmount NUMERIC NOT NULL DEFAULT 0.0,
+            Remarks TEXT,
+            SyncStatus TEXT DEFAULT 'Pending' CHECK (SyncStatus IN ('Pending','Synced','Failed')),
+            RemoteTransactionID INTEGER,
+            CreatedAt TEXT DEFAULT (datetime('now')),
+            UpdatedAt TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY(CustomerID) REFERENCES Customer(CustomerID) ON DELETE RESTRICT
+          )
+          ''',
+          '''
+          CREATE TABLE TransactionDetail (
+            TransactionDetailID INTEGER PRIMARY KEY AUTOINCREMENT,
+            TransactionID INTEGER NOT NULL,
+            ProductID INTEGER NOT NULL,
+            BatchNo TEXT,
+            Qty INTEGER NOT NULL CHECK (Qty > 0),
+            UnitPrice NUMERIC NOT NULL,
+            TotalPrice NUMERIC NOT NULL,
+            FOREIGN KEY(TransactionID) REFERENCES "Transaction"(TransactionID) ON DELETE CASCADE,
+            FOREIGN KEY(ProductID) REFERENCES Product(ProductID) ON DELETE RESTRICT
+          )
+          ''',
+          'CREATE INDEX IF NOT EXISTS idx_transaction_customer ON "Transaction"(CustomerID)',
+          'CREATE INDEX IF NOT EXISTS idx_transaction_date ON "Transaction"(Date)',
+          'CREATE INDEX IF NOT EXISTS idx_td_transaction ON TransactionDetail(TransactionID)',
+          'CREATE INDEX IF NOT EXISTS idx_td_product ON TransactionDetail(ProductID)',
+          '''
+          CREATE TRIGGER trg_td_require_batchno_before_insert
+          BEFORE INSERT ON TransactionDetail
+          WHEN (SELECT Type FROM "Transaction" WHERE TransactionID = NEW.TransactionID) = 'Return' AND NEW.BatchNo IS NULL
+          BEGIN
+            SELECT RAISE(ABORT, 'BatchNo is required for Return transaction details.');
+          END
+          ''',
+          '''
+          CREATE TRIGGER trg_td_require_batchno_before_update
+          BEFORE UPDATE ON TransactionDetail
+          WHEN (SELECT Type FROM "Transaction" WHERE TransactionID = NEW.TransactionID) = 'Return' AND NEW.BatchNo IS NULL
+          BEGIN
+            SELECT RAISE(ABORT, 'BatchNo is required for Return transaction details.');
+          END
+          ''',
+          '''
+          CREATE TRIGGER trg_td_after_insert_update_product_qty
+          AFTER INSERT ON TransactionDetail
+          BEGIN
+            UPDATE Product
+            SET AvailableQty = AvailableQty + CASE (SELECT Type FROM "Transaction" WHERE TransactionID = NEW.TransactionID)
+                WHEN 'Order' THEN -NEW.Qty
+                WHEN 'Return' THEN NEW.Qty
+                ELSE 0 END
+            WHERE ProductID = NEW.ProductID;
+          END
+          ''',
+          '''
+          CREATE TRIGGER trg_td_after_delete_product_qty
+          AFTER DELETE ON TransactionDetail
+          BEGIN
+            UPDATE Product
+            SET AvailableQty = AvailableQty + CASE (SELECT Type FROM "Transaction" WHERE TransactionID = OLD.TransactionID)
+                WHEN 'Order' THEN OLD.Qty
+                WHEN 'Return' THEN -OLD.Qty
+                ELSE 0 END
+            WHERE ProductID = OLD.ProductID;
+          END
+          ''',
+          '''
+          CREATE TRIGGER trg_td_after_update_product_qty
+          AFTER UPDATE ON TransactionDetail
+          BEGIN
+            UPDATE Product
+            SET AvailableQty = AvailableQty + CASE (SELECT Type FROM "Transaction" WHERE TransactionID = OLD.TransactionID)
+                WHEN 'Order' THEN OLD.Qty
+                WHEN 'Return' THEN -OLD.Qty
+                ELSE 0 END
+            WHERE ProductID = OLD.ProductID;
+
+            UPDATE Product
+            SET AvailableQty = AvailableQty + CASE (SELECT Type FROM "Transaction" WHERE TransactionID = NEW.TransactionID)
+                WHEN 'Order' THEN -NEW.Qty
+                WHEN 'Return' THEN NEW.Qty
+                ELSE 0 END
+            WHERE ProductID = NEW.ProductID;
+          END
+          ''',
+          '''
+          CREATE TRIGGER trg_td_after_insert_recalc_total
+          AFTER INSERT ON TransactionDetail
+          BEGIN
+            UPDATE "Transaction"
+            SET TotalAmount = IFNULL((SELECT SUM(TotalPrice) FROM TransactionDetail WHERE TransactionID = NEW.TransactionID), 0)
+            WHERE TransactionID = NEW.TransactionID;
+          END
+          ''',
+          '''
+          CREATE TRIGGER trg_td_after_delete_recalc_total
+          AFTER DELETE ON TransactionDetail
+          BEGIN
+            UPDATE "Transaction"
+            SET TotalAmount = IFNULL((SELECT SUM(TotalPrice) FROM TransactionDetail WHERE TransactionID = OLD.TransactionID), 0)
+            WHERE TransactionID = OLD.TransactionID;
+          END
+          ''',
+          '''
+          CREATE TRIGGER trg_td_after_update_recalc_total
+          AFTER UPDATE ON TransactionDetail
+          BEGIN
+            UPDATE "Transaction"
+            SET TotalAmount = IFNULL((SELECT SUM(TotalPrice) FROM TransactionDetail WHERE TransactionID = NEW.TransactionID), 0)
+            WHERE TransactionID = NEW.TransactionID;
+          END
+          '''
+        ];
+
+        for (final stmt in statements) {
+          await db.execute(stmt);
         }
       },
     );
@@ -32,91 +172,13 @@ class AppDatabase {
     return _db!;
   }
 
-  static Future<void> _createTables(Database db) async {
-    final statements = <String>[
-      // Customer
-      '''
-      CREATE TABLE Customer (
-        CustomerID INTEGER PRIMARY KEY AUTOINCREMENT,
-        Name TEXT NOT NULL UNIQUE,
-        Town TEXT
-      )
-      ''',
-
-      // User
-      '''
-      CREATE TABLE "User" (
-        UserID INTEGER PRIMARY KEY AUTOINCREMENT,
-        Name TEXT NOT NULL,
-        Town TEXT,
-        Role TEXT NOT NULL CHECK (Role IN ('Salesman','Customer'))
-      )
-      ''',
-
-      // Product
-      '''
-      CREATE TABLE Product (
-        ProductID INTEGER PRIMARY KEY AUTOINCREMENT,
-        Name TEXT NOT NULL UNIQUE,
-        Code TEXT,
-        UnitPrice NUMERIC NOT NULL DEFAULT 0.0,
-        AvailableQty INTEGER NOT NULL DEFAULT 0
-      )
-      ''',
-
-      // Transaction header (✅ added userEmail)
-      '''
-      CREATE TABLE "Transaction" (
-        TransactionID INTEGER PRIMARY KEY AUTOINCREMENT,
-        CustomerID INTEGER NOT NULL,
-        Type TEXT NOT NULL CHECK(Type IN ('Order','Return','Cash','Draft')),
-        Date TEXT NOT NULL DEFAULT (datetime('now')),
-        TotalAmount NUMERIC NOT NULL DEFAULT 0.0,
-        CashAmount NUMERIC NOT NULL DEFAULT 0.0,
-        Remarks TEXT,
-        SyncStatus TEXT DEFAULT 'Pending' CHECK (SyncStatus IN ('Pending','Synced','Failed')),
-        RemoteTransactionID INTEGER,
-        CreatedAt TEXT DEFAULT (datetime('now')),
-        UpdatedAt TEXT DEFAULT (datetime('now')),
-        userEmail TEXT,
-        FOREIGN KEY(CustomerID) REFERENCES Customer(CustomerID) ON DELETE RESTRICT
-      )
-      ''',
-
-      // TransactionDetail
-      '''
-      CREATE TABLE TransactionDetail (
-        TransactionDetailID INTEGER PRIMARY KEY AUTOINCREMENT,
-        TransactionID INTEGER NOT NULL,
-        ProductID INTEGER NOT NULL,
-        BatchNo TEXT,
-        Qty INTEGER NOT NULL CHECK (Qty > 0),
-        UnitPrice NUMERIC NOT NULL,
-        TotalPrice NUMERIC NOT NULL,
-        FOREIGN KEY(TransactionID) REFERENCES "Transaction"(TransactionID) ON DELETE CASCADE,
-        FOREIGN KEY(ProductID) REFERENCES Product(ProductID) ON DELETE RESTRICT
-      )
-      ''',
-    ];
-
-    for (final stmt in statements) {
-      await db.execute(stmt);
-    }
-
-    // triggers & indexes
-    await db.execute(
-        'CREATE INDEX IF NOT EXISTS idx_transaction_customer ON "Transaction"(CustomerID)');
-    await db.execute(
-        'CREATE INDEX IF NOT EXISTS idx_transaction_date ON "Transaction"(Date)');
-  }
-
   // ---------------------- HELPERS ----------------------
 
   static Future<int> insertCustomerIfNotExists(String name,
       {String? town}) async {
     final db = await init();
-    final rows =
-        await db.query('Customer', where: 'Name = ?', whereArgs: [name]);
+    final rows = await db.query('Customer',
+        where: 'Name = ?', whereArgs: [name], limit: 1);
     if (rows.isNotEmpty) return rows.first['CustomerID'] as int;
     return await db.insert('Customer', {'Name': name, 'Town': town ?? ''});
   }
@@ -124,8 +186,8 @@ class AppDatabase {
   static Future<int> insertProductIfNotExists(String name,
       {double unitPrice = 0.0, int availableQty = 0, String? code}) async {
     final db = await init();
-    final rows =
-        await db.query('Product', where: 'Name = ?', whereArgs: [name]);
+    final rows = await db.query('Product',
+        where: 'Name = ?', whereArgs: [name], limit: 1);
     if (rows.isNotEmpty) return rows.first['ProductID'] as int;
     return await db.insert('Product', {
       'Name': name,
@@ -135,7 +197,8 @@ class AppDatabase {
     });
   }
 
-  /// ✅ Create transaction header + details with logged-in user info
+  /// Create transaction header + details.
+  /// For Cash-only transactions (no details) we set TotalAmount = cashAmount
   static Future<int> createTransactionWithDetails({
     required int customerId,
     required String type, // 'Order'|'Return'|'Cash'|'Draft'
@@ -144,21 +207,20 @@ class AppDatabase {
     String? remarks,
   }) async {
     final db = await init();
-    final prefs = await SharedPreferences.getInstance();
-    final userEmail = prefs.getString('username') ?? 'unknown';
-
     return await db.transaction((txn) async {
+      final initialTotal =
+          (type == 'Cash' && (cashAmount ?? 0) > 0) ? (cashAmount ?? 0.0) : 0.0;
+
       final header = {
         'CustomerID': customerId,
         'Type': type,
         'Date': DateTime.now().toIso8601String(),
-        'TotalAmount': 0.0,
+        'TotalAmount': initialTotal,
         'CashAmount': cashAmount ?? 0.0,
         'Remarks': remarks ?? '',
         'SyncStatus': 'Pending',
         'CreatedAt': DateTime.now().toIso8601String(),
         'UpdatedAt': DateTime.now().toIso8601String(),
-        'userEmail': userEmail, // ✅
       };
 
       final tId = await txn.insert('"Transaction"', header);
@@ -192,26 +254,100 @@ class AppDatabase {
     });
   }
 
-  /// ✅ Get transactions for current logged-in user only
+  /// Update an existing transaction header and replace its details atomically.
+  static Future<void> updateTransactionAndReplaceDetails({
+    required int transactionId,
+    required int customerId,
+    required String type,
+    required List<Map<String, dynamic>> details,
+    double? cashAmount,
+    String? remarks,
+  }) async {
+    final db = await init();
+    await db.transaction((txn) async {
+      await txn.update(
+        '"Transaction"',
+        {
+          'CustomerID': customerId,
+          'Type': type,
+          'CashAmount': cashAmount ?? 0.0,
+          'Remarks': remarks ?? '',
+          'UpdatedAt': DateTime.now().toIso8601String(),
+        },
+        where: 'TransactionID = ?',
+        whereArgs: [transactionId],
+      );
+
+      await txn.delete('TransactionDetail',
+          where: 'TransactionID = ?', whereArgs: [transactionId]);
+
+      for (final d in details) {
+        int productId;
+        if (d.containsKey('productId')) {
+          productId = d['productId'] as int;
+        } else {
+          final name = d['productName'] as String;
+          productId = await insertProductIfNotExists(name,
+              unitPrice: (d['unitPrice'] ?? 0.0) as double,
+              availableQty: (d['availableQty'] ?? 0) as int);
+        }
+
+        final qty = (d['qty'] ?? 0) as int;
+        final unitPrice = ((d['unitPrice'] ?? 0.0) as num).toDouble();
+        final totalPrice = qty * unitPrice;
+
+        await txn.insert('TransactionDetail', {
+          'TransactionID': transactionId,
+          'ProductID': productId,
+          'BatchNo': d['batchNo'],
+          'Qty': qty,
+          'UnitPrice': unitPrice,
+          'TotalPrice': totalPrice,
+        });
+      }
+
+      if (details.isEmpty && type == 'Cash') {
+        await txn.update(
+            '"Transaction"',
+            {
+              'TotalAmount': cashAmount ?? 0.0,
+              'UpdatedAt': DateTime.now().toIso8601String()
+            },
+            where: 'TransactionID = ?',
+            whereArgs: [transactionId]);
+      } else {
+        await txn.update(
+            '"Transaction"', {'UpdatedAt': DateTime.now().toIso8601String()},
+            where: 'TransactionID = ?', whereArgs: [transactionId]);
+      }
+    });
+  }
+
+  /// Find an existing transaction for the same customer, same type and same day
+  /// Returns TransactionID or null
+  static Future<int?> findTransactionForCustomerOnDate(
+      int customerId, String type, DateTime date) async {
+    final db = await init();
+    final dayStr =
+        '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+    final rows = await db.query('"Transaction"',
+        where: 'CustomerID = ? AND Type = ? AND date(Date) = ?',
+        whereArgs: [customerId, type, dayStr],
+        limit: 1);
+    if (rows.isNotEmpty) return rows.first['TransactionID'] as int;
+    return null;
+  }
+
   static Future<List<Map<String, dynamic>>> getAllTransactionsForOverview(
       {int limit = 500}) async {
     final db = await init();
-    final prefs = await SharedPreferences.getInstance();
-    final userEmail = prefs.getString('username') ?? '';
-
-    return await db.query(
-      '"Transaction"',
-      where: 'userEmail = ?',
-      whereArgs: [userEmail],
-      orderBy: 'Date DESC',
-      limit: limit,
-    );
+    return await db.query('"Transaction"', orderBy: 'Date DESC', limit: limit);
   }
 
   static Future<List<Map<String, dynamic>>> getTransactionWithDetails(
       int transactionId) async {
     final db = await init();
-    return await db.rawQuery('''
+    final rows = await db.rawQuery('''
       SELECT t.TransactionID, t.CustomerID, t.Type, t.Date, t.TotalAmount, 
              t.CashAmount, t.Remarks, t.SyncStatus, t.UpdatedAt,
              td.TransactionDetailID, td.ProductID, td.BatchNo, td.Qty, 
@@ -221,34 +357,34 @@ class AppDatabase {
       LEFT JOIN Product p ON p.ProductID = td.ProductID
       WHERE t.TransactionID = ?
     ''', [transactionId]);
+
+    return rows;
   }
 
   static Future<void> markTransactionSynced(int transactionId,
       {int? remoteId}) async {
     final db = await init();
     await db.update(
-      '"Transaction"',
-      {
-        'SyncStatus': 'Synced',
-        'RemoteTransactionID': remoteId,
-        'UpdatedAt': DateTime.now().toIso8601String(),
-      },
-      where: 'TransactionID = ?',
-      whereArgs: [transactionId],
-    );
+        '"Transaction"',
+        {
+          'SyncStatus': 'Synced',
+          'RemoteTransactionID': remoteId,
+          'UpdatedAt': DateTime.now().toIso8601String(),
+        },
+        where: 'TransactionID = ?',
+        whereArgs: [transactionId]);
   }
 
   static Future<void> markTransactionFailed(int transactionId) async {
     final db = await init();
     await db.update(
-      '"Transaction"',
-      {
-        'SyncStatus': 'Failed',
-        'UpdatedAt': DateTime.now().toIso8601String(),
-      },
-      where: 'TransactionID = ?',
-      whereArgs: [transactionId],
-    );
+        '"Transaction"',
+        {
+          'SyncStatus': 'Failed',
+          'UpdatedAt': DateTime.now().toIso8601String(),
+        },
+        where: 'TransactionID = ?',
+        whereArgs: [transactionId]);
   }
 
   static Future<void> deleteDatabaseFile() async {

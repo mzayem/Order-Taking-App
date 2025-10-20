@@ -89,9 +89,6 @@ class _OverviewScreenState extends State<OverviewScreen> {
       final List<Map<String, dynamic>> items = [];
 
       for (final r in rows) {
-        print("Loaded Transaction Row: $r"); // 👈 DEBUG PRINT
-
-        // dummy customer data if API not fetched yet
         final custRows = await db.query(
           'Customer',
           where: 'CustomerID = ?',
@@ -102,17 +99,24 @@ class _OverviewScreenState extends State<OverviewScreen> {
             ? custRows.first['Name'] as String
             : 'Customer #${r['CustomerID']}';
 
-        // use correct total depending on type
+        // calculate display total: Cash uses CashAmount, others use TotalAmount
+        double totalAmount = 0.0;
         final type = r['Type'] as String? ?? 'Order';
-        final totalAmount = (r['TotalAmount'] ?? 0) as num;
-        final cashAmount = (r['CashAmount'] ?? 0) as num;
+        final totalField = (r['TotalAmount'] ?? 0.0) as num;
+        final cashField = (r['CashAmount'] ?? 0.0) as num;
+        if (type == 'Cash') {
+          totalAmount = cashField.toDouble();
+        } else {
+          totalAmount = totalField.toDouble();
+        }
 
         items.add({
           'transactionId': r['TransactionID'] as int,
           'customer': custName,
           'date':
               DateTime.tryParse(r['Date'] as String? ?? '') ?? DateTime.now(),
-          'total': type == 'Cash' ? cashAmount.toInt() : totalAmount.toInt(),
+          // keep total as int for compatibility with UI
+          'total': totalAmount.toInt(),
           'type': type,
           'syncStatus': r['SyncStatus'] as String? ?? 'Pending',
           'uploadedAt': r['SyncStatus'] == 'Synced'
@@ -370,6 +374,305 @@ class _OverviewScreenState extends State<OverviewScreen> {
     );
   }
 
+  // Called when user taps Edit from appBar (only available when one card selected)
+  Future<void> _onEditSelected() async {
+    if (_selectedTxIds.length != 1) return;
+    final id = _selectedTxIds.first;
+    final tx = _transactions.firstWhere((t) => t['transactionId'] == id,
+        orElse: () => {});
+    final type = tx['type'] as String? ?? 'Order';
+
+    if (type == 'Order') {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => OrderScreen(transactionId: id)),
+      );
+    } else if (type == 'Cash') {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => CashScreen(transactionId: id)),
+      );
+    } else if (type == 'Return') {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => ReturnScreen(transactionId: id)),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Edit for "$type" not implemented yet.')),
+      );
+    }
+
+    // after returning from edit screen reload transactions and reset selection
+    await _loadTransactions();
+    setState(() {
+      _selectionMode = false;
+      _selectedTxIds.clear();
+    });
+  }
+
+  // Show a dialog with transaction header + lines and Offer an Edit button inside dialog
+  // Show a dialog with transaction header + lines and Offer an Edit button inside dialog
+  Future<void> _showTransactionDetailsDialog(int transactionId) async {
+    final rows = await AppDatabase.getTransactionWithDetails(transactionId);
+    if (rows.isEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Transaction not found')));
+      return;
+    }
+
+    final header = rows.first;
+    final db = await AppDatabase.init();
+    final custRows = await db.query('Customer',
+        where: 'CustomerID = ?', whereArgs: [header['CustomerID']], limit: 1);
+    final customerName =
+        custRows.isNotEmpty ? custRows.first['Name'] as String : 'Customer';
+
+    final type = header['Type'] as String? ?? 'Order';
+    final date =
+        DateTime.tryParse(header['Date'] as String? ?? '') ?? DateTime.now();
+    final totalAmount = header['TotalAmount'] ?? 0;
+    final cashAmount = header['CashAmount'] ?? 0;
+    final remarks = header['Remarks'] ?? '';
+
+    // collect lines
+    final lines = <Map<String, dynamic>>[];
+    for (final r in rows) {
+      if (r['TransactionDetailID'] != null) {
+        lines.add({
+          'productName': r['ProductName'] ?? '',
+          'qty': r['Qty'],
+          'unitPrice': r['UnitPrice'],
+          'totalPrice': r['TotalPrice'],
+          'batchNo': r['BatchNo'],
+        });
+      }
+    }
+
+    await showDialog(
+      context: context,
+      builder: (ctx) {
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          insetPadding: const EdgeInsets.all(20),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(20),
+              color: Colors.white,
+            ),
+            padding: const EdgeInsets.all(16),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Header section
+                  Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 22,
+                        backgroundColor: Colors.teal.shade100,
+                        child: Icon(
+                          type == 'Cash'
+                              ? Icons.attach_money
+                              : type == 'Return'
+                                  ? Icons.assignment_return
+                                  : Icons.shopping_cart,
+                          color: Colors.teal.shade700,
+                          size: 26,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              customerName.toUpperCase(),
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Text(
+                              "$type • ${_shortDate(date)}",
+                              style: const TextStyle(color: Colors.grey),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Amount / Info section
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Colors.teal.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              type == 'Cash' ? 'Cash Amount' : 'Total Amount',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Text(
+                              'Rs.${type == 'Cash' ? cashAmount : totalAmount}',
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.teal),
+                            ),
+                          ],
+                        ),
+                        if (remarks.toString().isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Remarks: ',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              Expanded(
+                                child: Text(
+                                  remarks.toString(),
+                                  style: const TextStyle(color: Colors.black87),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Lines header
+                  const Text(
+                    'Order Lines',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                  const Divider(),
+
+                  if (lines.isEmpty)
+                    const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(12.0),
+                        child: Text(
+                          'No product lines',
+                          style: TextStyle(color: Colors.grey),
+                        ),
+                      ),
+                    )
+                  else
+                    ListView.separated(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: lines.length,
+                      separatorBuilder: (_, __) =>
+                          const Divider(height: 12, color: Colors.grey),
+                      itemBuilder: (context, i) {
+                        final l = lines[i];
+                        return ListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(
+                            l['productName'].toString(),
+                            style: const TextStyle(fontWeight: FontWeight.w500),
+                          ),
+                          subtitle: Text(
+                            'Qty: ${l['qty']}  |  Batch: ${l['batchNo'] ?? ''}',
+                            style: const TextStyle(color: Colors.grey),
+                          ),
+                          trailing: Text(
+                            'Rs.${l['totalPrice']}',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        );
+                      },
+                    ),
+                  const SizedBox(height: 20),
+
+                  // Buttons
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.grey[700],
+                        ),
+                        child: const Text('Close'),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton.icon(
+                        onPressed: () async {
+                          Navigator.of(ctx).pop();
+                          if (type == 'Order') {
+                            await Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) =>
+                                    OrderScreen(transactionId: transactionId),
+                              ),
+                            );
+                          } else if (type == 'Cash') {
+                            await Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) =>
+                                    CashScreen(transactionId: transactionId),
+                              ),
+                            );
+                          } else if (type == 'Return') {
+                            await Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) =>
+                                    ReturnScreen(transactionId: transactionId),
+                              ),
+                            );
+                          } else {
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                                content: Text(
+                                    'Edit for "$type" not implemented yet.')));
+                          }
+                          await _loadTransactions();
+                          if (mounted) setState(() {});
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.teal,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                        icon: const Icon(Icons.edit, size: 18),
+                        label: const Text('Edit'),
+                      ),
+                    ],
+                  )
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final headerDate = _transactions.isNotEmpty
@@ -385,21 +688,27 @@ class _OverviewScreenState extends State<OverviewScreen> {
     final showUploadFab =
         _selectionMode && _selectedTxIds.isNotEmpty && !_isUploading;
 
+    // Totals - show separate totals for Order and Cash
     final orderTotal = _transactions.fold<int>(
         0, (sum, t) => sum + (t['type'] == 'Order' ? (t['total'] as int) : 0));
     final cashTotal = _transactions.fold<int>(
         0, (sum, t) => sum + (t['type'] == 'Cash' ? (t['total'] as int) : 0));
 
-    print("Order total: $orderTotal | Cash total: $cashTotal");
     return Scaffold(
       backgroundColor: Colors.grey[100],
       appBar: AppBar(
         title: Text(_selectionMode
             ? "${_selectedTxIds.length} Selected"
-            : "Home Screen"),
+            : _formatDayDate(headerDate)),
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         actions: [
+          if (_selectionMode && _selectedTxIds.length == 1)
+            IconButton(
+              icon: const Icon(Icons.edit),
+              tooltip: 'Edit selected',
+              onPressed: _onEditSelected,
+            ),
           if (_selectionMode)
             IconButton(
               icon: const Icon(Icons.close),
@@ -407,7 +716,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
                 _selectionMode = false;
                 _selectedTxIds.clear();
               }),
-            )
+            ),
         ],
       ),
       floatingActionButton: _isUploading
@@ -417,11 +726,14 @@ class _OverviewScreenState extends State<OverviewScreen> {
               child: SizedBox(
                 width: 56,
                 height: 56,
-                child: Stack(alignment: Alignment.center, children: [
-                  CircularProgressIndicator(
-                      value: _uploadProgress, color: Colors.white),
-                  const Icon(Icons.cloud_upload, color: Colors.white)
-                ]),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    CircularProgressIndicator(
+                        value: _uploadProgress, color: Colors.white),
+                    const Icon(Icons.cloud_upload, color: Colors.white),
+                  ],
+                ),
               ),
             )
           : (showUploadFab
@@ -460,7 +772,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
                         const Icon(Icons.attach_money, size: 18),
                         const SizedBox(width: 6),
                         Text("Rs.$cashTotal"),
-                      ])
+                      ]),
                     ]),
               ),
               Column(children: [
@@ -494,17 +806,19 @@ class _OverviewScreenState extends State<OverviewScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
-              child: Row(children: [
-                for (final f in ['All', 'Draft', 'Order', 'Cash', 'Return'])
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: ChoiceChip(
-                      label: Text(f),
-                      selected: selectedFilter == f,
-                      onSelected: (_) => setState(() => selectedFilter = f),
+              child: Row(
+                children: [
+                  for (final f in ['All', 'Draft', 'Order', 'Cash', 'Return'])
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                          label: Text(f),
+                          selected: selectedFilter == f,
+                          onSelected: (_) =>
+                              setState(() => selectedFilter = f)),
                     ),
-                  ),
-              ]),
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 12),
@@ -526,7 +840,12 @@ class _OverviewScreenState extends State<OverviewScreen> {
                           _selectedTxIds.add(txnId);
                         }),
                         onTap: () {
-                          if (_selectionMode) _toggleSelection(txnId);
+                          if (_selectionMode) {
+                            _toggleSelection(txnId);
+                          } else {
+                            // show details dialog
+                            _showTransactionDetailsDialog(txnId);
+                          }
                         },
                         child: _buildOrderCard(order),
                       );

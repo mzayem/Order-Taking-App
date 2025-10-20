@@ -1,8 +1,10 @@
+// lib/screens/order_screen.dart
 import 'package:flutter/material.dart';
-import 'package:dmc/db/database.dart';
+import '../db/database.dart';
 
 class OrderScreen extends StatefulWidget {
-  const OrderScreen({super.key});
+  final int? transactionId;
+  const OrderScreen({super.key, this.transactionId});
 
   @override
   State<OrderScreen> createState() => _OrderScreenState();
@@ -19,8 +21,64 @@ class _OrderScreenState extends State<OrderScreen> {
   String? selectedCustomer;
   Map<String, dynamic>? selectedProduct;
   final TextEditingController qtyController = TextEditingController();
-
   List<Map<String, dynamic>> selectedProducts = [];
+
+  bool _isLoading = false;
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.transactionId != null) {
+      _loadExistingTransaction(widget.transactionId!);
+    }
+  }
+
+  Future<void> _loadExistingTransaction(int transactionId) async {
+    setState(() => _isLoading = true);
+    final rows = await AppDatabase.getTransactionWithDetails(transactionId);
+    if (rows.isEmpty) {
+      setState(() => _isLoading = false);
+      return;
+    }
+
+    final db = await AppDatabase.init();
+    final header = rows.first;
+    final custId = header['CustomerID'] as int?;
+    String custName = '';
+    if (custId != null) {
+      final custRows = await db.query('Customer',
+          where: 'CustomerID = ?', whereArgs: [custId], limit: 1);
+      if (custRows.isNotEmpty) custName = custRows.first['Name'] as String;
+    }
+
+    final List<Map<String, dynamic>> loadedProducts = [];
+    for (final r in rows) {
+      if (r['TransactionDetailID'] == null) continue;
+      final tdId = r['TransactionDetailID'] as int?;
+      final productId = r['ProductID'] as int?;
+      final productName = r['ProductName'] as String? ?? '';
+      final qty = (r['Qty'] as num?)?.toInt() ?? 0;
+      final unitPrice = (r['UnitPrice'] as num?)?.toDouble() ?? 0.0;
+      final total =
+          (r['TotalPrice'] as num?)?.toInt() ?? (qty * unitPrice).toInt();
+
+      loadedProducts.add({
+        'transactionDetailId': tdId,
+        'productId': productId,
+        'name': productName,
+        'qty': qty,
+        'price': unitPrice.toInt(),
+        'total': total,
+      });
+    }
+
+    setState(() {
+      selectedCustomer = custName.isNotEmpty ? custName : null;
+      selectedProducts = loadedProducts;
+      _isLoading = false;
+    });
+  }
 
   void addProduct() {
     if (selectedProduct != null && qtyController.text.isNotEmpty) {
@@ -63,7 +121,7 @@ class _OrderScreenState extends State<OrderScreen> {
   int get totalAmount =>
       selectedProducts.fold(0, (sum, item) => sum + (item['total'] as int));
 
-  void _saveOrderAs(String type) async {
+  Future<void> _saveOrderAs(String type) async {
     if (selectedCustomer == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Please select a customer")),
@@ -77,36 +135,61 @@ class _OrderScreenState extends State<OrderScreen> {
       return;
     }
 
-    // Ensure customer exists
-    final custId =
-        await AppDatabase.insertCustomerIfNotExists(selectedCustomer!);
+    setState(() => _isSaving = true);
 
-    final details = <Map<String, dynamic>>[];
-    for (final p in selectedProducts) {
-      final prodId = await AppDatabase.insertProductIfNotExists(p['name'],
-          unitPrice: (p['price'] as num).toDouble(), availableQty: 0);
-      details.add({
-        'productId': prodId,
-        'qty': p['qty'],
-        'unitPrice': (p['price'] as num).toDouble(),
+    try {
+      final custId =
+          await AppDatabase.insertCustomerIfNotExists(selectedCustomer!);
+
+      final details = <Map<String, dynamic>>[];
+      for (final p in selectedProducts) {
+        final prodId = await AppDatabase.insertProductIfNotExists(p['name'],
+            unitPrice: (p['price'] as num).toDouble(), availableQty: 0);
+        details.add({
+          'productId': prodId,
+          'qty': p['qty'],
+          'unitPrice': (p['price'] as num).toDouble(),
+        });
+      }
+
+      // check existing transaction for same customer, same type, same day
+      final existingId = await AppDatabase.findTransactionForCustomerOnDate(
+          custId, type, DateTime.now());
+
+      if (existingId != null) {
+        // update existing
+        await AppDatabase.updateTransactionAndReplaceDetails(
+          transactionId: existingId,
+          customerId: custId,
+          type: type,
+          details: details,
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Order updated (local)")));
+      } else {
+        final txnId = await AppDatabase.createTransactionWithDetails(
+          customerId: custId,
+          type: type,
+          details: details,
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("Order saved (local) id: $txnId")));
+      }
+
+      setState(() {
+        selectedCustomer = null;
+        selectedProduct = null;
+        selectedProducts = [];
+        qtyController.clear();
       });
+    } catch (e) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Error: $e")));
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
     }
-
-    final txnId = await AppDatabase.createTransactionWithDetails(
-      customerId: custId,
-      type: type,
-      details: details,
-    );
-
-    ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Order saved (local) id: $txnId")));
-
-    setState(() {
-      selectedCustomer = null;
-      selectedProduct = null;
-      selectedProducts = [];
-      qtyController.clear();
-    });
   }
 
   void _cancelOrder() {
@@ -126,14 +209,24 @@ class _OrderScreenState extends State<OrderScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoading) {
+      return Scaffold(
+        appBar: AppBar(
+          centerTitle: true,
+          title: Text("Order", style: TextStyle(color: Colors.white)),
+          backgroundColor: Colors.black,
+        ),
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
         centerTitle: true,
-        title: const Text("Order"),
+        title: Text(widget.transactionId == null ? "Order" : "Edit Order"),
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
-        elevation: 0,
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
@@ -318,7 +411,14 @@ class _OrderScreenState extends State<OrderScreen> {
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10)),
                     ),
-                    child: const Text("Save", style: TextStyle(fontSize: 16)),
+                    child: _isSaving
+                        ? const SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(
+                                color: Colors.white, strokeWidth: 2),
+                          )
+                        : const Text("Save", style: TextStyle(fontSize: 16)),
                   ),
                 ),
               ],

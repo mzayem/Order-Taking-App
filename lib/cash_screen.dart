@@ -1,146 +1,204 @@
+// lib/screens/cash_screen.dart
 import 'package:flutter/material.dart';
 import '../db/database.dart';
-// import 'dart:convert';
-// import 'package:http/http.dart' as http;
 
 class CashScreen extends StatefulWidget {
-  const CashScreen({super.key});
+  // When this is provided, screen will load that transaction for editing
+  final int? transactionId;
+  const CashScreen({super.key, this.transactionId});
 
   @override
   State<CashScreen> createState() => _CashScreenState();
 }
 
 class _CashScreenState extends State<CashScreen> {
-  final List<String> customers = [
+  final _formKey = GlobalKey<FormState>();
+  final TextEditingController _amountController = TextEditingController();
+  final TextEditingController _remarksController = TextEditingController();
+
+  String? _selectedCustomer;
+  bool _isSaving = false;
+  bool _isLoading = false;
+
+  // Dummy list until API available
+  final List<String> _dummyCustomers = [
     "Ali",
     "Ahmed",
     "Sara",
-    "Hassan"
-  ]; // ✅ dummy customers
-
-  // 🔹 Later replace with API call:
-  /*
-  List<String> customers = [];
-  Future<void> fetchCustomersFromApi() async {
-    try {
-      final response = await http.get(Uri.parse('https://yourapi/customers'));
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        setState(() {
-          customers = List<String>.from(data.map((e) => e['name']));
-        });
-      }
-    } catch (e) {
-      print("Error fetching customers: $e");
-    }
-  }
+    "Hassan",
+    "Ahsan",
+  ];
 
   @override
   void initState() {
     super.initState();
-    fetchCustomersFromApi();
+    if (widget.transactionId != null) {
+      _loadExisting(widget.transactionId!);
+    }
   }
-  */
 
-  String? selectedCustomer;
-  final TextEditingController amountController = TextEditingController();
-  final TextEditingController remarksController = TextEditingController();
+  Future<void> _loadExisting(int transactionId) async {
+    setState(() => _isLoading = true);
+    try {
+      final rows = await AppDatabase.getTransactionWithDetails(transactionId);
+      if (rows.isEmpty) {
+        setState(() => _isLoading = false);
+        return;
+      }
 
-  bool isSaving = false;
+      final header = rows.first;
+      final db = await AppDatabase.init();
+      final custId = header['CustomerID'] as int?;
+      if (custId != null) {
+        final custRows = await db.query('Customer',
+            where: 'CustomerID = ?', whereArgs: [custId], limit: 1);
+        if (custRows.isNotEmpty) {
+          _selectedCustomer = custRows.first['Name'] as String?;
+        }
+      }
 
-  InputDecoration _inputDecoration(String label) => InputDecoration(
+      final cash = (header['CashAmount'] ?? 0.0) as num;
+      _amountController.text = cash.toString();
+      _remarksController.text = (header['Remarks'] ?? '') as String;
+    } catch (e) {
+      debugPrint('Error loading cash transaction: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _saveCashPayment() async {
+    if (!_formKey.currentState!.validate()) return;
+    if (_selectedCustomer == null || _selectedCustomer!.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please select a customer")),
+      );
+      return;
+    }
+
+    setState(() => _isSaving = true);
+
+    try {
+      final customerId =
+          await AppDatabase.insertCustomerIfNotExists(_selectedCustomer!);
+      final cashAmount = double.tryParse(_amountController.text.trim()) ?? 0.0;
+
+      // If screen was opened for editing a specific transactionId -> update that
+      if (widget.transactionId != null) {
+        await AppDatabase.updateTransactionAndReplaceDetails(
+          transactionId: widget.transactionId!,
+          customerId: customerId,
+          type: 'Cash',
+          details: const [],
+          cashAmount: cashAmount,
+          remarks: _remarksController.text.trim(),
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Cash updated (local)')));
+      } else {
+        // Otherwise fallback: check same-customer same-day to update or create
+        final existingId = await AppDatabase.findTransactionForCustomerOnDate(
+            customerId, 'Cash', DateTime.now());
+
+        if (existingId != null) {
+          await AppDatabase.updateTransactionAndReplaceDetails(
+            transactionId: existingId,
+            customerId: customerId,
+            type: 'Cash',
+            details: const [],
+            cashAmount: cashAmount,
+            remarks: _remarksController.text.trim(),
+          );
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Cash updated (local)')));
+        } else {
+          final txnId = await AppDatabase.createTransactionWithDetails(
+            customerId: customerId,
+            type: 'Cash',
+            details: const [],
+            cashAmount: cashAmount,
+            remarks: _remarksController.text.trim(),
+          );
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Cash saved (local) id: $txnId')));
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _selectedCustomer = null;
+        _amountController.clear();
+        _remarksController.clear();
+      });
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error saving cash: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  InputDecoration inputDecoration(String label) => InputDecoration(
         labelText: label,
         filled: true,
         fillColor: const Color(0xFFF6F6F6),
         contentPadding:
-            const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
+            const EdgeInsets.symmetric(vertical: 16, horizontal: 14),
         border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: const BorderSide(color: Color(0xFFEBEBEB))),
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFFEBEBEB)),
+        ),
         enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: const BorderSide(color: Color(0xFFEBEBEB))),
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFFEBEBEB)),
+        ),
       );
-
-  void cancel() {
-    setState(() {
-      selectedCustomer = null;
-      amountController.clear();
-      remarksController.clear();
-    });
-  }
-
-  Future<void> saveCash() async {
-    if (selectedCustomer == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Please select customer")));
-      return;
-    }
-    if (amountController.text.trim().isEmpty ||
-        double.tryParse(amountController.text.trim()) == null ||
-        double.parse(amountController.text.trim()) <= 0) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text("Enter valid amount")));
-      return;
-    }
-
-    setState(() => isSaving = true);
-
-    try {
-      final custId =
-          await AppDatabase.insertCustomerIfNotExists(selectedCustomer!);
-
-      await AppDatabase.createTransactionWithDetails(
-        customerId: custId,
-        type: "Cash",
-        details: const [],
-        cashAmount: double.parse(amountController.text.trim()),
-        remarks: remarksController.text.trim(),
-      );
-
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Cash payment saved locally!")));
-
-      cancel();
-    } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text("Error: $e")));
-    } finally {
-      setState(() => isSaving = false);
-    }
-  }
-
-  @override
-  void dispose() {
-    amountController.dispose();
-    remarksController.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
+    final customers = _dummyCustomers; // replace with API list later
+
+    if (_isLoading) {
+      return Scaffold(
+        appBar: AppBar(
+          title:
+              Text(widget.transactionId == null ? 'Cash Payment' : 'Edit Cash'),
+          backgroundColor: Colors.black,
+        ),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
     return Scaffold(
-      backgroundColor: Colors.white,
       appBar: AppBar(
-        title: const Text("Cash Payment"),
+        title:
+            Text(widget.transactionId == null ? 'Cash Payment' : 'Edit Cash'),
         centerTitle: true,
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
-        elevation: 0,
       ),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 18.0),
+      body: Padding(
+        padding: const EdgeInsets.all(18.0),
+        child: Form(
+          key: _formKey,
           child: Column(
             children: [
-              const SizedBox(height: 58),
+              const SizedBox(height: 20),
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text("Select Customer",
+                    style:
+                        TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              ),
+              const SizedBox(height: 10),
               Autocomplete<String>(
-                initialValue: selectedCustomer != null
-                    ? TextEditingValue(text: selectedCustomer!)
-                    : const TextEditingValue(),
                 optionsBuilder: (TextEditingValue textEditingValue) {
                   if (textEditingValue.text.isEmpty) {
-                    return customers;
+                    return const Iterable<String>.empty();
                   }
                   return customers.where((String option) {
                     return option
@@ -148,83 +206,55 @@ class _CashScreenState extends State<CashScreen> {
                         .contains(textEditingValue.text.toLowerCase());
                   });
                 },
+                onSelected: (String selection) {
+                  setState(() => _selectedCustomer = selection);
+                },
                 fieldViewBuilder:
                     (context, controller, focusNode, onEditingComplete) {
-                  return TextFormField(
+                  controller.text = _selectedCustomer ?? '';
+                  return TextField(
                     controller: controller,
                     focusNode: focusNode,
                     onEditingComplete: onEditingComplete,
-                    decoration: _inputDecoration("Select Customer"),
-                    onChanged: (val) {
-                      setState(() {
-                        selectedCustomer = val;
-                      });
-                    },
+                    decoration: inputDecoration("Select Customer"),
                   );
                 },
-                onSelected: (String selection) {
-                  setState(() {
-                    selectedCustomer = selection;
-                  });
+              ),
+              const SizedBox(height: 20),
+              TextFormField(
+                controller: _amountController,
+                keyboardType: TextInputType.number,
+                decoration: inputDecoration("Enter Amount (Rs)"),
+                validator: (v) {
+                  if (v == null || v.isEmpty) return 'Enter amount';
+                  final value = double.tryParse(v);
+                  if (value == null || value <= 0) {
+                    return 'Enter valid positive number';
+                  }
+                  return null;
                 },
               ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: amountController,
-                keyboardType: TextInputType.number,
-                decoration: _inputDecoration("Enter Cash Amount"),
-              ),
-              const SizedBox(height: 12),
-              // TextField(
-              //   controller: remarksController,
-              //   decoration: _inputDecoration("Remarks (optional)"),
-              //   maxLines: 2,
-              // ),
-              const SizedBox(height: 18),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8.0, top: 8),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: cancel,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.red[400],
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10)),
+              const SizedBox(height: 30),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _isSaving ? null : _saveCashPayment,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.black,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  child: _isSaving
+                      ? const CircularProgressIndicator(
+                          color: Colors.white, strokeWidth: 2)
+                      : Text(
+                          widget.transactionId == null
+                              ? "Save Cash Payment"
+                              : "Update Cash",
+                          style: const TextStyle(fontSize: 16),
                         ),
-                        child: const Text("Cancel"),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: isSaving ? null : saveCash,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.black,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10)),
-                        ),
-                        child: isSaving
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  color: Colors.white,
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Text("Save"),
-                      ),
-                    ),
-                  ],
                 ),
               ),
-              SizedBox(height: MediaQuery.of(context).padding.bottom),
             ],
           ),
         ),

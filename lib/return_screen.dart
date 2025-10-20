@@ -1,8 +1,10 @@
+// lib/screens/return_screen.dart
 import 'package:flutter/material.dart';
-import 'package:dmc/db/database.dart';
+import '../db/database.dart';
 
 class ReturnScreen extends StatefulWidget {
-  const ReturnScreen({super.key});
+  final int? transactionId;
+  const ReturnScreen({super.key, this.transactionId});
 
   @override
   State<ReturnScreen> createState() => _ReturnScreenState();
@@ -30,6 +32,61 @@ class _ReturnScreenState extends State<ReturnScreen> {
 
   List<Map<String, dynamic>> selectedProducts = [];
 
+  bool _isLoading = false;
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.transactionId != null) {
+      _loadExisting(widget.transactionId!);
+    }
+  }
+
+  Future<void> _loadExisting(int transactionId) async {
+    setState(() => _isLoading = true);
+    try {
+      final rows = await AppDatabase.getTransactionWithDetails(transactionId);
+      if (rows.isEmpty) {
+        if (mounted) setState(() => _isLoading = false);
+        return;
+      }
+
+      final header = rows.first;
+      final db = await AppDatabase.init();
+      final custId = header['CustomerID'] as int?;
+      if (custId != null) {
+        final custRows = await db.query('Customer',
+            where: 'CustomerID = ?', whereArgs: [custId], limit: 1);
+        if (custRows.isNotEmpty) {
+          selectedCustomer = custRows.first['Name'] as String?;
+        }
+      }
+
+      remarksController.text = (header['Remarks'] ?? '') as String;
+
+      final List<Map<String, dynamic>> loaded = [];
+      for (final r in rows) {
+        if (r['TransactionDetailID'] == null) continue;
+        loaded.add({
+          'productId': r['ProductID'] as int?,
+          'name': r['ProductName'] as String? ?? '',
+          'qty': (r['Qty'] as num?)?.toInt() ?? 0,
+          'price': (r['UnitPrice'] as num?)?.toInt() ?? 0,
+          'batch': r['BatchNo'] as String? ?? '',
+        });
+      }
+
+      setState(() {
+        selectedProducts = loaded;
+      });
+    } catch (e) {
+      debugPrint('Error loading return transaction: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
   void addProduct() {
     if (selectedCustomer == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -41,6 +98,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
           const SnackBar(content: Text("Please select a product")));
       return;
     }
+
     final qtyText = qtyController.text.trim();
     final batchText = batchController.text.trim();
 
@@ -81,10 +139,10 @@ class _ReturnScreenState extends State<ReturnScreen> {
         "qty": qty,
         "batch": batchText,
         "price": selectedProduct!['price'],
+        // productId will be resolved on save (insertProductIfNotExists)
       });
 
       selectedProduct!['availableQty'] = available - qty;
-
       selectedProduct = null;
       qtyController.clear();
       batchController.clear();
@@ -102,7 +160,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
     });
   }
 
-  void saveAs(String type) async {
+  Future<void> saveAs(String type) async {
     if (selectedCustomer == null) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Please select customer")));
@@ -114,47 +172,79 @@ class _ReturnScreenState extends State<ReturnScreen> {
       return;
     }
 
-    final custId =
-        await AppDatabase.insertCustomerIfNotExists(selectedCustomer!);
+    setState(() => _isSaving = true);
 
-    final details = <Map<String, dynamic>>[];
-    for (final p in selectedProducts) {
-      final prodId = await AppDatabase.insertProductIfNotExists(p['name'],
-          unitPrice: (p['price'] as num).toDouble(), availableQty: 0);
-      details.add({
-        'productId': prodId,
-        'batchNo': p['batch'],
-        'qty': p['qty'],
-        'unitPrice': (p['price'] as num).toDouble(),
+    try {
+      final custId =
+          await AppDatabase.insertCustomerIfNotExists(selectedCustomer!);
+
+      final details = <Map<String, dynamic>>[];
+      for (final p in selectedProducts) {
+        final prodId = await AppDatabase.insertProductIfNotExists(p['name'],
+            unitPrice: (p['price'] as num).toDouble(), availableQty: 0);
+        details.add({
+          'productId': prodId,
+          'batchNo': p['batch'],
+          'qty': p['qty'],
+          'unitPrice': (p['price'] as num).toDouble(),
+        });
+      }
+
+      // If opened for editing a specific transaction, update that
+      if (widget.transactionId != null) {
+        await AppDatabase.updateTransactionAndReplaceDetails(
+          transactionId: widget.transactionId!,
+          customerId: custId,
+          type: type,
+          details: details,
+          remarks: remarksController.text.trim(),
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Return updated (local)")));
+      } else {
+        // fallback: same-customer same-day -> update
+        final existingId = await AppDatabase.findTransactionForCustomerOnDate(
+            custId, type, DateTime.now());
+
+        if (existingId != null) {
+          await AppDatabase.updateTransactionAndReplaceDetails(
+            transactionId: existingId,
+            customerId: custId,
+            type: type,
+            details: details,
+            remarks: remarksController.text.trim(),
+          );
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("Return updated (local)")));
+        } else {
+          final txnId = await AppDatabase.createTransactionWithDetails(
+            customerId: custId,
+            type: type,
+            details: details,
+            remarks: remarksController.text.trim(),
+          );
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text("Saved as $type (local) id: $txnId")));
+        }
+      }
+
+      setState(() {
+        selectedCustomer = null;
+        selectedProduct = null;
+        qtyController.clear();
+        batchController.clear();
+        remarksController.clear();
+        selectedProducts.clear();
       });
+    } catch (e) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Error: $e")));
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
     }
-
-    final txnId = await AppDatabase.createTransactionWithDetails(
-      customerId: custId,
-      type: type,
-      details: details,
-      remarks: remarksController.text.trim(),
-    );
-
-    ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Saved as $type (local) id: $txnId")));
-
-    setState(() {
-      selectedCustomer = null;
-      selectedProduct = null;
-      qtyController.clear();
-      batchController.clear();
-      remarksController.clear();
-      selectedProducts.clear();
-    });
-  }
-
-  @override
-  void dispose() {
-    qtyController.dispose();
-    batchController.dispose();
-    remarksController.dispose();
-    super.dispose();
   }
 
   InputDecoration _inputDecoration(String label) => InputDecoration(
@@ -172,15 +262,31 @@ class _ReturnScreenState extends State<ReturnScreen> {
       );
 
   @override
+  void dispose() {
+    qtyController.dispose();
+    batchController.dispose();
+    remarksController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    if (_isLoading) {
+      return Scaffold(
+          appBar: AppBar(
+            title: Text('Return', style: TextStyle(color: Colors.white)),
+            backgroundColor: Colors.black,
+          ),
+          body: Center(child: CircularProgressIndicator()));
+    }
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        title: const Text("Return"),
+        title: Text(widget.transactionId == null ? 'Return' : 'Edit Return'),
         centerTitle: true,
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
-        elevation: 0,
       ),
       body: SafeArea(
         child: Padding(
@@ -384,7 +490,14 @@ class _ReturnScreenState extends State<ReturnScreen> {
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10)),
                         ),
-                        child: const Text("Save"),
+                        child: _isSaving
+                            ? const SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CircularProgressIndicator(
+                                    color: Colors.white, strokeWidth: 2),
+                              )
+                            : const Text("Save"),
                       ),
                     ),
                   ],
