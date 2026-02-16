@@ -99,6 +99,11 @@ class _OverviewScreenState extends State<OverviewScreen> {
             ? custRows.first['Name'] as String
             : 'Customer #${r['CustomerID']}';
 
+        // Get customer town
+        final custTown = custRows.isNotEmpty
+            ? (custRows.first['Town'] as String? ?? '')
+            : '';
+
         // calculate display total: Cash uses CashAmount, others use TotalAmount
         double totalAmount = 0.0;
         final type = r['Type'] as String? ?? 'Order';
@@ -115,14 +120,13 @@ class _OverviewScreenState extends State<OverviewScreen> {
           'customer': custName,
           'date':
               DateTime.tryParse(r['Date'] as String? ?? '') ?? DateTime.now(),
-          // keep total as int for compatibility with UI
           'total': totalAmount.toInt(),
           'type': type,
           'syncStatus': r['SyncStatus'] as String? ?? 'Pending',
           'uploadedAt': r['SyncStatus'] == 'Synced'
               ? DateTime.tryParse(r['UpdatedAt'] as String? ?? '')
               : null,
-          'town': '',
+          'town': custTown,
         });
       }
 
@@ -135,6 +139,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
 
   Future<void> _uploadSelected() async {
     if (_selectedTxIds.isEmpty) return;
+
     setState(() {
       _isUploading = true;
       _uploadProgress = 0.0;
@@ -142,6 +147,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
 
     final prefs = await SharedPreferences.getInstance();
     final baseUrl = prefs.getString('baseUrl') ?? '';
+    final userId = prefs.getInt('userId') ?? 0;
     final sync = SyncService(baseUrl);
 
     if (baseUrl.isEmpty) {
@@ -152,23 +158,18 @@ class _OverviewScreenState extends State<OverviewScreen> {
     }
 
     final ids = _selectedTxIds.toList();
-    final total = ids.length;
-    int done = 0;
+    final List<Map<String, dynamic>> transactionsToUpload = [];
 
     for (final id in ids) {
       final rows = await AppDatabase.getTransactionWithDetails(id);
-      if (rows.isEmpty) {
-        done++;
-        setState(() => _uploadProgress = done / total);
-        continue;
-      }
-
+      if (rows.isEmpty) continue;
       final header = rows.first;
       final details = <Map<String, dynamic>>[];
       for (final r in rows) {
         if (r['TransactionDetailID'] != null) {
           details.add({
             'product_id': r['ProductID'],
+            'product_name': r['ProductName'],
             'batch_no': r['BatchNo'],
             'qty': r['Qty'],
             'unit_price': r['UnitPrice'],
@@ -177,38 +178,56 @@ class _OverviewScreenState extends State<OverviewScreen> {
         }
       }
 
-      final payload = {
-        'customer_id': header['CustomerID'],
-        'type': header['Type'],
-        'date': header['Date'],
-        'total_amount': header['TotalAmount'],
-        'cash_amount': header['CashAmount'],
-        'remarks': header['Remarks'],
+      transactionsToUpload.add({
+        'TransactionID': id,
+        'UserID': userId,
+        'CustomerID': header['CustomerID'],
+        'Type': header['Type'],
+        'Date': header['Date'],
+        'TotalAmount': header['TotalAmount'],
+        'CashAmount': header['CashAmount'],
+        'Remarks': header['Remarks'],
+        'SyncStatus': 'Pending',
         'lines': details,
-      };
+      });
+    }
+    final res = await sync.uploadTransactions(transactionsToUpload);
 
-      final res = await sync.uploadTransaction(id, payload);
-      if (res['ok'] == true) {
-        await AppDatabase.markTransactionSynced(id,
-            remoteId: res['remoteId'] as int?);
-      } else {
+    if (res['ok'] == true) {
+      for (final id in ids) {
+        await AppDatabase.markTransactionSynced(id);
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              "Upload complete: ${ids.length} transactions uploaded successfully"),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } else {
+      for (final id in ids) {
         await AppDatabase.markTransactionFailed(id);
       }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Upload failed: ${res['error']}"),
+          duration: const Duration(seconds: 3),
+        ),
+      );
 
-      done++;
-      setState(() => _uploadProgress = done / total);
+      print("Upload failed: ${res['error']}");
     }
 
     await _loadTransactions();
+
     setState(() {
       _isUploading = false;
       _selectionMode = false;
       _selectedTxIds.clear();
       _uploadProgress = 0.0;
     });
-
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text("Upload finished.")));
   }
 
   void _toggleSelection(int txnId) {
@@ -374,7 +393,6 @@ class _OverviewScreenState extends State<OverviewScreen> {
     );
   }
 
-  // Called when user taps Edit from appBar (only available when one card selected)
   Future<void> _onEditSelected() async {
     if (_selectedTxIds.length != 1) return;
     final id = _selectedTxIds.first;
@@ -403,7 +421,6 @@ class _OverviewScreenState extends State<OverviewScreen> {
       );
     }
 
-    // after returning from edit screen reload transactions and reset selection
     await _loadTransactions();
     setState(() {
       _selectionMode = false;
@@ -411,8 +428,6 @@ class _OverviewScreenState extends State<OverviewScreen> {
     });
   }
 
-  // Show a dialog with transaction header + lines and Offer an Edit button inside dialog
-  // Show a dialog with transaction header + lines and Offer an Edit button inside dialog
   Future<void> _showTransactionDetailsDialog(int transactionId) async {
     final rows = await AppDatabase.getTransactionWithDetails(transactionId);
     if (rows.isEmpty) {
@@ -435,7 +450,6 @@ class _OverviewScreenState extends State<OverviewScreen> {
     final cashAmount = header['CashAmount'] ?? 0;
     final remarks = header['Remarks'] ?? '';
 
-    // collect lines
     final lines = <Map<String, dynamic>>[];
     for (final r in rows) {
       if (r['TransactionDetailID'] != null) {
@@ -468,7 +482,6 @@ class _OverviewScreenState extends State<OverviewScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Header section
                   Row(
                     children: [
                       CircleAvatar(
@@ -506,8 +519,6 @@ class _OverviewScreenState extends State<OverviewScreen> {
                     ],
                   ),
                   const SizedBox(height: 16),
-
-                  // Amount / Info section
                   Container(
                     decoration: BoxDecoration(
                       color: Colors.teal.shade50,
@@ -555,8 +566,6 @@ class _OverviewScreenState extends State<OverviewScreen> {
                     ),
                   ),
                   const SizedBox(height: 16),
-
-                  // Lines header
                   const Text(
                     'Order Lines',
                     style: TextStyle(
@@ -565,7 +574,6 @@ class _OverviewScreenState extends State<OverviewScreen> {
                     ),
                   ),
                   const Divider(),
-
                   if (lines.isEmpty)
                     const Center(
                       child: Padding(
@@ -604,8 +612,6 @@ class _OverviewScreenState extends State<OverviewScreen> {
                       },
                     ),
                   const SizedBox(height: 20),
-
-                  // Buttons
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
@@ -688,7 +694,6 @@ class _OverviewScreenState extends State<OverviewScreen> {
     final showUploadFab =
         _selectionMode && _selectedTxIds.isNotEmpty && !_isUploading;
 
-    // Totals - show separate totals for Order and Cash
     final orderTotal = _transactions.fold<int>(
         0, (sum, t) => sum + (t['type'] == 'Order' ? (t['total'] as int) : 0));
     final cashTotal = _transactions.fold<int>(
@@ -843,7 +848,6 @@ class _OverviewScreenState extends State<OverviewScreen> {
                           if (_selectionMode) {
                             _toggleSelection(txnId);
                           } else {
-                            // show details dialog
                             _showTransactionDetailsDialog(txnId);
                           }
                         },

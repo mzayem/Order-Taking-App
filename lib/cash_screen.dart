@@ -1,9 +1,11 @@
 // lib/screens/cash_screen.dart
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import '../db/database.dart';
 
 class CashScreen extends StatefulWidget {
-  // When this is provided, screen will load that transaction for editing
   final int? transactionId;
   const CashScreen({super.key, this.transactionId});
 
@@ -19,21 +21,77 @@ class _CashScreenState extends State<CashScreen> {
   String? _selectedCustomer;
   bool _isSaving = false;
   bool _isLoading = false;
+  bool _isLoadingData = true;
 
-  // Dummy list until API available
-  final List<String> _dummyCustomers = [
-    "Ali",
-    "Ahmed",
-    "Sara",
-    "Hassan",
-    "Ahsan",
-  ];
+  List<String> _customers = [];
 
   @override
   void initState() {
     super.initState();
+    _loadInitialData();
+  }
+
+  Future<void> _loadInitialData() async {
+    setState(() => _isLoadingData = true);
+    await _fetchCustomers();
     if (widget.transactionId != null) {
-      _loadExisting(widget.transactionId!);
+      await _loadExisting(widget.transactionId!);
+    }
+    setState(() => _isLoadingData = false);
+  }
+
+  Future<void> _fetchCustomers() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final baseUrl = prefs.getString('baseUrl') ?? '';
+
+      if (baseUrl.isEmpty) {
+        await _loadCustomersFromDB();
+        return;
+      }
+
+      try {
+        final customerUrl = Uri.parse('$baseUrl/customers_604281180');
+        final response =
+            await http.get(customerUrl).timeout(const Duration(seconds: 10));
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          if (data['status'] == 'success' && data['result'] != null) {
+            final custList = data['result'] as List;
+            setState(() {
+              _customers = custList.map((c) => c['Name'] as String).toList();
+            });
+
+            // Cache in DB using upsert
+            for (var cust in custList) {
+              await AppDatabase.upsertCustomer({
+                'CustomerID': cust['CustomerId'],
+                'Name': cust['Name'],
+                'Town': cust['Town'] ?? '',
+              });
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('Error fetching customers: $e');
+        await _loadCustomersFromDB();
+      }
+    } catch (e) {
+      debugPrint('Error in _fetchCustomers: $e');
+      await _loadCustomersFromDB();
+    }
+  }
+
+  Future<void> _loadCustomersFromDB() async {
+    try {
+      final db = await AppDatabase.init();
+      final rows = await db.query('Customer');
+      setState(() {
+        _customers = rows.map((r) => r['Name'] as String).toList();
+      });
+    } catch (e) {
+      debugPrint('Error loading customers from DB: $e');
     }
   }
 
@@ -83,7 +141,6 @@ class _CashScreenState extends State<CashScreen> {
           await AppDatabase.insertCustomerIfNotExists(_selectedCustomer!);
       final cashAmount = double.tryParse(_amountController.text.trim()) ?? 0.0;
 
-      // If screen was opened for editing a specific transactionId -> update that
       if (widget.transactionId != null) {
         await AppDatabase.updateTransactionAndReplaceDetails(
           transactionId: widget.transactionId!,
@@ -97,7 +154,6 @@ class _CashScreenState extends State<CashScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Cash updated (local)')));
       } else {
-        // Otherwise fallback: check same-customer same-day to update or create
         final existingId = await AppDatabase.findTransactionForCustomerOnDate(
             customerId, 'Cash', DateTime.now());
 
@@ -160,9 +216,7 @@ class _CashScreenState extends State<CashScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final customers = _dummyCustomers; // replace with API list later
-
-    if (_isLoading) {
+    if (_isLoadingData) {
       return Scaffold(
         appBar: AppBar(
           title:
@@ -200,7 +254,7 @@ class _CashScreenState extends State<CashScreen> {
                   if (textEditingValue.text.isEmpty) {
                     return const Iterable<String>.empty();
                   }
-                  return customers.where((String option) {
+                  return _customers.where((String option) {
                     return option
                         .toLowerCase()
                         .contains(textEditingValue.text.toLowerCase());

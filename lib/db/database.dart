@@ -1,4 +1,3 @@
-// lib/db/database.dart
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 
@@ -174,6 +173,52 @@ class AppDatabase {
 
   // ---------------------- HELPERS ----------------------
 
+  // Insert or update Customer by CustomerID (safe upsert)
+  static Future<void> upsertCustomer(Map<String, dynamic> customer) async {
+    final db = await init();
+    int count = await db.update(
+      'Customer',
+      {
+        'Name': customer['Name'],
+        'Town': customer['Town'] ?? '',
+      },
+      where: 'CustomerID = ?',
+      whereArgs: [customer['CustomerID']],
+    );
+    if (count == 0) {
+      await db.insert('Customer', {
+        'CustomerID': customer['CustomerID'],
+        'Name': customer['Name'],
+        'Town': customer['Town'] ?? '',
+      });
+    }
+  }
+
+  // Insert or update Product by ProductID (safe upsert)
+  static Future<void> upsertProduct(Map<String, dynamic> product) async {
+    final db = await init();
+    int count = await db.update(
+      'Product',
+      {
+        'Name': product['Name'],
+        'Code': product['Code'] ?? '',
+        'UnitPrice': (product['UnitPrice'] as num?)?.toDouble() ?? 0.0,
+        'AvailableQty': product['AvailableQty'] ?? 0,
+      },
+      where: 'ProductID = ?',
+      whereArgs: [product['ProductID']],
+    );
+    if (count == 0) {
+      await db.insert('Product', {
+        'ProductID': product['ProductID'],
+        'Name': product['Name'],
+        'Code': product['Code'] ?? '',
+        'UnitPrice': (product['UnitPrice'] as num?)?.toDouble() ?? 0.0,
+        'AvailableQty': product['AvailableQty'] ?? 0,
+      });
+    }
+  }
+
   static Future<int> insertCustomerIfNotExists(String name,
       {String? town}) async {
     final db = await init();
@@ -197,8 +242,6 @@ class AppDatabase {
     });
   }
 
-  /// Create transaction header + details.
-  /// For Cash-only transactions (no details) we set TotalAmount = cashAmount
   static Future<int> createTransactionWithDetails({
     required int customerId,
     required String type, // 'Order'|'Return'|'Cash'|'Draft'
@@ -254,7 +297,6 @@ class AppDatabase {
     });
   }
 
-  /// Update an existing transaction header and replace its details atomically.
   static Future<void> updateTransactionAndReplaceDetails({
     required int transactionId,
     required int customerId,
@@ -323,8 +365,6 @@ class AppDatabase {
     });
   }
 
-  /// Find an existing transaction for the same customer, same type and same day
-  /// Returns TransactionID or null
   static Future<int?> findTransactionForCustomerOnDate(
       int customerId, String type, DateTime date) async {
     final db = await init();

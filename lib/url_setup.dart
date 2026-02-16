@@ -18,9 +18,22 @@ class _UrlSetupScreenState extends State<UrlSetupScreen> {
           .showSnackBar(const SnackBar(content: Text('Please enter API URL')));
       return;
     }
+
+    // Validate URL format
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('URL must start with http:// or https://')));
+      return;
+    }
+
+    // Remove trailing slash if present
+    final cleanUrl = url.endsWith('/') ? url.substring(0, url.length - 1) : url;
+
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('isUrlSaved', true);
-    await prefs.setString('baseUrl', url);
+    await prefs.setString('baseUrl', cleanUrl);
+
+    if (!mounted) return;
     Navigator.pushReplacement(
         context, MaterialPageRoute(builder: (_) => const LoginScreen()));
   }
@@ -46,6 +59,7 @@ class _UrlSetupScreenState extends State<UrlSetupScreen> {
                   controller: urlController,
                   decoration: const InputDecoration(
                       labelText: "Enter API URL",
+                      hintText: "https://faux-api.com/serve",
                       prefixIcon: Icon(Icons.link),
                       border: OutlineInputBorder())),
               const SizedBox(height: 20),

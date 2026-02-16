@@ -1,5 +1,8 @@
 // lib/screens/return_screen.dart
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import '../db/database.dart';
 
 class ReturnScreen extends StatefulWidget {
@@ -11,12 +14,8 @@ class ReturnScreen extends StatefulWidget {
 }
 
 class _ReturnScreenState extends State<ReturnScreen> {
-  final List<String> customers = ["Ali", "Ahmed", "Sara", "Hassan"];
-  final List<Map<String, dynamic>> products = [
-    {"name": "Product A", "price": 100, "availableQty": 50},
-    {"name": "Product B", "price": 200, "availableQty": 30},
-    {"name": "Product C", "price": 150, "availableQty": 20},
-  ];
+  List<String> customers = [];
+  List<Map<String, dynamic>> products = [];
 
   final Map<String, List<String>> productBatches = {
     "Product A": ["A-1001", "A-1002", "A-1003"],
@@ -34,12 +33,123 @@ class _ReturnScreenState extends State<ReturnScreen> {
 
   bool _isLoading = false;
   bool _isSaving = false;
+  bool _isLoadingData = true;
 
   @override
   void initState() {
     super.initState();
+    _loadInitialData();
+  }
+
+  Future<void> _loadInitialData() async {
+    setState(() => _isLoadingData = true);
+    await _fetchCustomersAndProducts();
     if (widget.transactionId != null) {
-      _loadExisting(widget.transactionId!);
+      await _loadExisting(widget.transactionId!);
+    }
+    setState(() => _isLoadingData = false);
+  }
+
+  Future<void> _fetchCustomersAndProducts() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final baseUrl = prefs.getString('baseUrl') ?? '';
+
+      if (baseUrl.isEmpty) {
+        await _loadCustomersFromDB();
+        await _loadProductsFromDB();
+        return;
+      }
+
+      // Fetch customers
+      try {
+        final resp = await http
+            .get(Uri.parse('$baseUrl/customers_604281180'))
+            .timeout(const Duration(seconds: 10));
+        if (resp.statusCode == 200) {
+          final data = jsonDecode(resp.body);
+          if (data['status'] == 'success' && data['result'] != null) {
+            final list = data['result'] as List;
+            setState(() {
+              customers = list.map((c) => c['Name'] as String).toList();
+            });
+            for (var c in list) {
+              await AppDatabase.upsertCustomer({
+                'CustomerID': c['CustomerId'],
+                'Name': c['Name'],
+                'Town': c['Town'] ?? '',
+              });
+            }
+          }
+        }
+      } catch (_) {
+        await _loadCustomersFromDB();
+      }
+
+      // Fetch products
+      try {
+        final resp = await http
+            .get(Uri.parse('$baseUrl/product_604281180'))
+            .timeout(const Duration(seconds: 10));
+        if (resp.statusCode == 200) {
+          final data = jsonDecode(resp.body);
+          if (data['status'] == 'success' && data['result'] != null) {
+            final list = data['result'] as List;
+            setState(() {
+              products = list
+                  .map((p) => {
+                        'name': p['Name'] as String,
+                        'price': (p['UnitPrice'] as num).toInt(),
+                        'availableQty': p['AvailableQty'] as int,
+                      })
+                  .toList();
+            });
+            for (var p in list) {
+              await AppDatabase.upsertProduct({
+                'ProductID': p['ProductID'],
+                'Name': p['Name'],
+                'Code': p['Code'] ?? '',
+                'UnitPrice': (p['UnitPrice'] as num).toDouble(),
+                'AvailableQty': p['AvailableQty'] as int,
+              });
+            }
+          }
+        }
+      } catch (_) {
+        await _loadProductsFromDB();
+      }
+    } catch (e) {
+      debugPrint('Error fetching customers/products: $e');
+      await _loadCustomersFromDB();
+      await _loadProductsFromDB();
+    }
+  }
+
+  Future<void> _loadCustomersFromDB() async {
+    try {
+      final rows = await (await AppDatabase.init()).query('Customer');
+      setState(() {
+        customers = rows.map((r) => r['Name'] as String).toList();
+      });
+    } catch (e) {
+      debugPrint('Error loading customers from DB: $e');
+    }
+  }
+
+  Future<void> _loadProductsFromDB() async {
+    try {
+      final rows = await (await AppDatabase.init()).query('Product');
+      setState(() {
+        products = rows
+            .map((r) => {
+                  'name': r['Name'] as String,
+                  'price': (r['UnitPrice'] as num).toInt(),
+                  'availableQty': r['AvailableQty'] as int,
+                })
+            .toList();
+      });
+    } catch (e) {
+      debugPrint('Error loading products from DB: $e');
     }
   }
 
@@ -48,38 +158,29 @@ class _ReturnScreenState extends State<ReturnScreen> {
     try {
       final rows = await AppDatabase.getTransactionWithDetails(transactionId);
       if (rows.isEmpty) {
-        if (mounted) setState(() => _isLoading = false);
+        setState(() => _isLoading = false);
         return;
       }
-
       final header = rows.first;
       final db = await AppDatabase.init();
-      final custId = header['CustomerID'] as int?;
-      if (custId != null) {
-        final custRows = await db.query('Customer',
-            where: 'CustomerID = ?', whereArgs: [custId], limit: 1);
-        if (custRows.isNotEmpty) {
-          selectedCustomer = custRows.first['Name'] as String?;
+      final custRows = await db.query('Customer',
+          where: 'CustomerID = ?', whereArgs: [header['CustomerID']], limit: 1);
+      if (custRows.isNotEmpty) {
+        selectedCustomer = custRows.first['Name'] as String;
+      }
+      remarksController.text = header['Remarks'] ?? '';
+      final loaded = <Map<String, dynamic>>[];
+      for (var r in rows) {
+        if (r['TransactionDetailID'] != null) {
+          loaded.add({
+            'name': r['ProductName'] as String,
+            'qty': (r['Qty'] as num).toInt(),
+            'batch': r['BatchNo'] as String? ?? '',
+            'price': (r['UnitPrice'] as num).toInt(),
+          });
         }
       }
-
-      remarksController.text = (header['Remarks'] ?? '') as String;
-
-      final List<Map<String, dynamic>> loaded = [];
-      for (final r in rows) {
-        if (r['TransactionDetailID'] == null) continue;
-        loaded.add({
-          'productId': r['ProductID'] as int?,
-          'name': r['ProductName'] as String? ?? '',
-          'qty': (r['Qty'] as num?)?.toInt() ?? 0,
-          'price': (r['UnitPrice'] as num?)?.toInt() ?? 0,
-          'batch': r['BatchNo'] as String? ?? '',
-        });
-      }
-
-      setState(() {
-        selectedProducts = loaded;
-      });
+      setState(() => selectedProducts = loaded);
     } catch (e) {
       debugPrint('Error loading return transaction: $e');
     } finally {
@@ -98,10 +199,8 @@ class _ReturnScreenState extends State<ReturnScreen> {
           const SnackBar(content: Text("Please select a product")));
       return;
     }
-
     final qtyText = qtyController.text.trim();
     final batchText = batchController.text.trim();
-
     if (qtyText.isEmpty ||
         int.tryParse(qtyText) == null ||
         int.parse(qtyText) <= 0) {
@@ -114,34 +213,27 @@ class _ReturnScreenState extends State<ReturnScreen> {
           .showSnackBar(const SnackBar(content: Text("Enter batch number")));
       return;
     }
-
     final productName = selectedProduct!['name'] as String;
     final allowedBatches = productBatches[productName] ?? [];
-
     if (!allowedBatches.contains(batchText)) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("This batch is not from our company")));
       return;
     }
-
     final qty = int.parse(qtyText);
-    final available = (selectedProduct!['availableQty'] as int);
-
+    final available = selectedProduct!['availableQty'] as int;
     if (qty > available) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Quantity exceeds available stock")));
       return;
     }
-
     setState(() {
       selectedProducts.add({
         "name": productName,
         "qty": qty,
         "batch": batchText,
         "price": selectedProduct!['price'],
-        // productId will be resolved on save (insertProductIfNotExists)
       });
-
       selectedProduct!['availableQty'] = available - qty;
       selectedProduct = null;
       qtyController.clear();
@@ -173,13 +265,12 @@ class _ReturnScreenState extends State<ReturnScreen> {
     }
 
     setState(() => _isSaving = true);
-
     try {
       final custId =
           await AppDatabase.insertCustomerIfNotExists(selectedCustomer!);
 
       final details = <Map<String, dynamic>>[];
-      for (final p in selectedProducts) {
+      for (var p in selectedProducts) {
         final prodId = await AppDatabase.insertProductIfNotExists(p['name'],
             unitPrice: (p['price'] as num).toDouble(), availableQty: 0);
         details.add({
@@ -190,7 +281,6 @@ class _ReturnScreenState extends State<ReturnScreen> {
         });
       }
 
-      // If opened for editing a specific transaction, update that
       if (widget.transactionId != null) {
         await AppDatabase.updateTransactionAndReplaceDetails(
           transactionId: widget.transactionId!,
@@ -203,7 +293,6 @@ class _ReturnScreenState extends State<ReturnScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text("Return updated (local)")));
       } else {
-        // fallback: same-customer same-day -> update
         final existingId = await AppDatabase.findTransactionForCustomerOnDate(
             custId, type, DateTime.now());
 
@@ -271,13 +360,13 @@ class _ReturnScreenState extends State<ReturnScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
+    if (_isLoadingData) {
       return Scaffold(
           appBar: AppBar(
-            title: Text('Return', style: TextStyle(color: Colors.white)),
+            title: const Text('Return', style: TextStyle(color: Colors.white)),
             backgroundColor: Colors.black,
           ),
-          body: Center(child: CircularProgressIndicator()));
+          body: const Center(child: CircularProgressIndicator()));
     }
 
     return Scaffold(

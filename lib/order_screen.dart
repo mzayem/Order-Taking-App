@@ -1,5 +1,8 @@
 // lib/screens/order_screen.dart
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import '../db/database.dart';
 
 class OrderScreen extends StatefulWidget {
@@ -11,12 +14,8 @@ class OrderScreen extends StatefulWidget {
 }
 
 class _OrderScreenState extends State<OrderScreen> {
-  final List<String> customers = ["Ali", "Ahmed", "Sara", "Salman", "Ayesha"];
-  final List<Map<String, dynamic>> products = [
-    {"name": "Product A", "price": 100, "availableQty": 50},
-    {"name": "Product B", "price": 200, "availableQty": 30},
-    {"name": "Product C", "price": 150, "availableQty": 20},
-  ];
+  List<String> customers = [];
+  List<Map<String, dynamic>> products = [];
 
   String? selectedCustomer;
   Map<String, dynamic>? selectedProduct;
@@ -25,87 +24,171 @@ class _OrderScreenState extends State<OrderScreen> {
 
   bool _isLoading = false;
   bool _isSaving = false;
+  bool _isLoadingData = true;
 
   @override
   void initState() {
     super.initState();
+    _loadInitialData();
+  }
+
+  Future<void> _loadInitialData() async {
+    setState(() => _isLoadingData = true);
+    await _fetchCustomersAndProducts();
     if (widget.transactionId != null) {
-      _loadExistingTransaction(widget.transactionId!);
+      await _loadExistingTransaction(widget.transactionId!);
     }
+    setState(() => _isLoadingData = false);
+  }
+
+  Future<void> _fetchCustomersAndProducts() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final baseUrl = prefs.getString('baseUrl') ?? '';
+      if (baseUrl.isEmpty) {
+        await _loadCustomersFromDB();
+      } else {
+        // Fetch customers
+        try {
+          final resp = await http
+              .get(Uri.parse('$baseUrl/customers_604281180'))
+              .timeout(const Duration(seconds: 10));
+          if (resp.statusCode == 200) {
+            final data = jsonDecode(resp.body);
+            if (data['status'] == 'success' && data['result'] != null) {
+              final list = data['result'] as List;
+              setState(() {
+                customers = list.map((c) => c['Name'] as String).toList();
+              });
+              for (var c in list) {
+                await AppDatabase.upsertCustomer({
+                  'CustomerID': c['CustomerId'],
+                  'Name': c['Name'],
+                  'Town': c['Town'] ?? '',
+                });
+              }
+            }
+          }
+        } catch (_) {
+          await _loadCustomersFromDB();
+        }
+      }
+
+      if (baseUrl.isEmpty) {
+        await _loadProductsFromDB();
+      } else {
+        // Fetch products
+        try {
+          final resp = await http
+              .get(Uri.parse('$baseUrl/product_604281180'))
+              .timeout(const Duration(seconds: 10));
+          if (resp.statusCode == 200) {
+            final data = jsonDecode(resp.body);
+            if (data['status'] == 'success' && data['result'] != null) {
+              final list = data['result'] as List;
+              setState(() {
+                products = list
+                    .map((p) => {
+                          'name': p['Name'] as String,
+                          'price': (p['UnitPrice'] as num).toInt(),
+                          'availableQty': p['AvailableQty'] as int,
+                          'code': p['Code'] ?? '',
+                        })
+                    .toList();
+              });
+              for (var p in list) {
+                await AppDatabase.upsertProduct({
+                  'ProductID': p['ProductID'],
+                  'Name': p['Name'],
+                  'Code': p['Code'] ?? '',
+                  'UnitPrice': (p['UnitPrice'] as num).toDouble(),
+                  'AvailableQty': p['AvailableQty'] as int,
+                });
+              }
+            }
+          }
+        } catch (_) {
+          await _loadProductsFromDB();
+        }
+      }
+    } catch (e) {
+      debugPrint('Error in _fetchCustomersAndProducts: $e');
+      await _loadCustomersFromDB();
+      await _loadProductsFromDB();
+    }
+  }
+
+  Future<void> _loadCustomersFromDB() async {
+    final rows = await (await AppDatabase.init()).query('Customer');
+    setState(() {
+      customers = rows.map((r) => r['Name'] as String).toList();
+    });
+  }
+
+  Future<void> _loadProductsFromDB() async {
+    final rows = await (await AppDatabase.init()).query('Product');
+    setState(() {
+      products = rows
+          .map((r) => {
+                'name': r['Name'] as String,
+                'price': (r['UnitPrice'] as num).toInt(),
+                'availableQty': r['AvailableQty'] as int,
+                'code': r['Code'] ?? '',
+              })
+          .toList();
+    });
   }
 
   Future<void> _loadExistingTransaction(int transactionId) async {
     setState(() => _isLoading = true);
     final rows = await AppDatabase.getTransactionWithDetails(transactionId);
-    if (rows.isEmpty) {
-      setState(() => _isLoading = false);
-      return;
-    }
-
-    final db = await AppDatabase.init();
-    final header = rows.first;
-    final custId = header['CustomerID'] as int?;
-    String custName = '';
-    if (custId != null) {
+    if (rows.isNotEmpty) {
+      final header = rows.first;
+      final db = await AppDatabase.init();
       final custRows = await db.query('Customer',
-          where: 'CustomerID = ?', whereArgs: [custId], limit: 1);
-      if (custRows.isNotEmpty) custName = custRows.first['Name'] as String;
+          where: 'CustomerID = ?', whereArgs: [header['CustomerID']], limit: 1);
+      if (custRows.isNotEmpty) {
+        selectedCustomer = custRows.first['Name'] as String;
+      }
+      final loaded = <Map<String, dynamic>>[];
+      for (var r in rows) {
+        if (r['TransactionDetailID'] != null) {
+          loaded.add({
+            'transactionDetailId': r['TransactionDetailID'],
+            'productId': r['ProductID'],
+            'name': r['ProductName'],
+            'qty': (r['Qty'] as num).toInt(),
+            'price': (r['UnitPrice'] as num).toInt(),
+            'total': (r['TotalPrice'] as num).toInt(),
+          });
+        }
+      }
+      selectedProducts = loaded;
     }
-
-    final List<Map<String, dynamic>> loadedProducts = [];
-    for (final r in rows) {
-      if (r['TransactionDetailID'] == null) continue;
-      final tdId = r['TransactionDetailID'] as int?;
-      final productId = r['ProductID'] as int?;
-      final productName = r['ProductName'] as String? ?? '';
-      final qty = (r['Qty'] as num?)?.toInt() ?? 0;
-      final unitPrice = (r['UnitPrice'] as num?)?.toDouble() ?? 0.0;
-      final total =
-          (r['TotalPrice'] as num?)?.toInt() ?? (qty * unitPrice).toInt();
-
-      loadedProducts.add({
-        'transactionDetailId': tdId,
-        'productId': productId,
-        'name': productName,
-        'qty': qty,
-        'price': unitPrice.toInt(),
-        'total': total,
-      });
-    }
-
-    setState(() {
-      selectedCustomer = custName.isNotEmpty ? custName : null;
-      selectedProducts = loadedProducts;
-      _isLoading = false;
-    });
+    setState(() => _isLoading = false);
   }
 
   void addProduct() {
     if (selectedProduct != null && qtyController.text.isNotEmpty) {
       final qty = int.tryParse(qtyController.text) ?? 0;
+      final available = selectedProduct!['availableQty'] as int;
       if (qty <= 0) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Enter a valid quantity")),
-        );
+            const SnackBar(content: Text("Enter a valid quantity")));
         return;
       }
-      final available = selectedProduct!['availableQty'] as int;
       if (qty > available) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Quantity exceeds available stock")),
-        );
+            const SnackBar(content: Text("Quantity exceeds available stock")));
         return;
       }
-
       final price = selectedProduct!['price'] as int;
-      final total = qty * price;
-
       setState(() {
         selectedProducts.add({
           "name": selectedProduct!['name'],
           "qty": qty,
           "price": price,
-          "total": total,
+          "total": qty * price,
         });
         selectedProduct!['availableQty'] = available - qty;
         qtyController.clear();
@@ -113,8 +196,7 @@ class _OrderScreenState extends State<OrderScreen> {
       });
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Select product and enter quantity")),
-      );
+          const SnackBar(content: Text("Select product and enter quantity")));
     }
   }
 
@@ -124,47 +206,37 @@ class _OrderScreenState extends State<OrderScreen> {
   Future<void> _saveOrderAs(String type) async {
     if (selectedCustomer == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please select a customer")),
-      );
+          const SnackBar(content: Text("Please select a customer")));
       return;
     }
     if (selectedProducts.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Add at least one product")),
-      );
+          const SnackBar(content: Text("Add at least one product")));
       return;
     }
-
     setState(() => _isSaving = true);
-
     try {
       final custId =
           await AppDatabase.insertCustomerIfNotExists(selectedCustomer!);
-
       final details = <Map<String, dynamic>>[];
-      for (final p in selectedProducts) {
-        final prodId = await AppDatabase.insertProductIfNotExists(p['name'],
+      for (var p in selectedProducts) {
+        final pid = await AppDatabase.insertProductIfNotExists(p['name'],
             unitPrice: (p['price'] as num).toDouble(), availableQty: 0);
         details.add({
-          'productId': prodId,
+          'productId': pid,
           'qty': p['qty'],
           'unitPrice': (p['price'] as num).toDouble(),
         });
       }
-
-      // check existing transaction for same customer, same type, same day
       final existingId = await AppDatabase.findTransactionForCustomerOnDate(
           custId, type, DateTime.now());
-
       if (existingId != null) {
-        // update existing
         await AppDatabase.updateTransactionAndReplaceDetails(
           transactionId: existingId,
           customerId: custId,
           type: type,
           details: details,
         );
-        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text("Order updated (local)")));
       } else {
@@ -173,53 +245,42 @@ class _OrderScreenState extends State<OrderScreen> {
           type: type,
           details: details,
         );
-        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text("Order saved (local) id: $txnId")));
       }
-
       setState(() {
         selectedCustomer = null;
-        selectedProduct = null;
-        selectedProducts = [];
+        selectedProducts.clear();
         qtyController.clear();
       });
     } catch (e) {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text("Error: $e")));
     } finally {
-      if (mounted) setState(() => _isSaving = false);
+      setState(() => _isSaving = false);
     }
   }
 
   void _cancelOrder() {
     setState(() {
       selectedCustomer = null;
-      selectedProduct = null;
       selectedProducts.clear();
       qtyController.clear();
     });
   }
 
   @override
-  void dispose() {
-    qtyController.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
+    if (_isLoadingData) {
       return Scaffold(
         appBar: AppBar(
           centerTitle: true,
-          title: Text("Order", style: TextStyle(color: Colors.white)),
+          title: Text(widget.transactionId == null ? "Order" : "Edit Order"),
           backgroundColor: Colors.black,
         ),
-        body: Center(child: CircularProgressIndicator()),
+        body: const Center(child: CircularProgressIndicator()),
       );
     }
-
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
