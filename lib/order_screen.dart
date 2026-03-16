@@ -356,80 +356,50 @@ class _OrderScreenState extends State<OrderScreen> {
 
   /// --------------------- SAVE ORDER ---------------------
 
-  Future<void> _saveOrderAs(String type) async {
-    if (selectedCustomer == null || selectedCustomerObj == null) {
+  void _saveOrderAs(String type) async {
+    if (selectedCustomer == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Please select a customer")));
+        const SnackBar(content: Text("Please select a customer")),
+      );
       return;
     }
-
     if (selectedProducts.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Add at least one product")));
+        const SnackBar(content: Text("Add at least one product")),
+      );
       return;
     }
 
-    setState(() => _isSaving = true);
+    // Ensure customer exists
+    final custId =
+        await AppDatabase.insertCustomerIfNotExists(selectedCustomer!);
 
-    try {
-      final custId = await AppDatabase.insertCustomerIfNotExists(
-        selectedCustomer!,
-        town: selectedCustomerObj!['townId']?.toString(),
-      );
-
-      final details = <Map<String, dynamic>>[];
-
-      for (final p in selectedProducts) {
-        final pid = await AppDatabase.insertProductIfNotExists(
-          p['name'] as String? ?? '',
-          unitPrice: (p['price'] as num?)?.toDouble() ?? 0.0,
-          availableQty: 0,
-          code: null,
-        );
-
-        details.add({
-          'productId': pid,
-          'qty': p['qty'] as int? ?? 0,
-          'unitPrice': (p['price'] as num?)?.toDouble() ?? 0.0,
-        });
-      }
-
-      final existingId = await AppDatabase.findTransactionForCustomerOnDate(
-          custId, type, DateTime.now());
-
-      if (existingId != null) {
-        await AppDatabase.updateTransactionAndReplaceDetails(
-          transactionId: existingId,
-          customerId: custId,
-          type: type,
-          details: details,
-        );
-
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Order updated (local)")));
-      } else {
-        final txnId = await AppDatabase.createTransactionWithDetails(
-          customerId: custId,
-          type: type,
-          details: details,
-        );
-
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("Order saved (local) id: $txnId")));
-      }
-
-      setState(() {
-        selectedCustomer = null;
-        selectedCustomerObj = null;
-        selectedProducts.clear();
-        qtyController.clear();
+    final details = <Map<String, dynamic>>[];
+    for (final p in selectedProducts) {
+      final prodId = await AppDatabase.insertProductIfNotExists(p['name'],
+          unitPrice: (p['price'] as num).toDouble(), availableQty: 0);
+      details.add({
+        'productId': prodId,
+        'qty': p['qty'],
+        'unitPrice': (p['price'] as num).toDouble(),
       });
-    } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text("Error: $e")));
-    } finally {
-      setState(() => _isSaving = false);
     }
+
+    final txnId = await AppDatabase.createTransactionWithDetails(
+      customerId: custId,
+      type: type,
+      details: details,
+    );
+
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Order saved (local) id: $txnId")));
+
+    setState(() {
+      selectedCustomer = null;
+      selectedProduct = null;
+      selectedProducts = [];
+      qtyController.clear();
+    });
   }
 
   void _cancelOrder() {
@@ -444,17 +414,6 @@ class _OrderScreenState extends State<OrderScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoadingData) {
-      return Scaffold(
-        appBar: AppBar(
-          centerTitle: true,
-          title: Text(widget.transactionId == null ? "Order" : "Edit Order"),
-          backgroundColor: Colors.black,
-        ),
-        body: const Center(child: CircularProgressIndicator()),
-      );
-    }
-
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(

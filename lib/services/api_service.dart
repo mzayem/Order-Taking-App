@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:path/path.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../db/database.dart';
 
@@ -128,9 +130,15 @@ class ApiService {
       final prefs = await SharedPreferences.getInstance();
 
       final baseUrl = prefs.getString('baseUrl') ?? '';
-      final userId = prefs.getString('userId') ?? '';
+      final userId = (prefs.getString("userId") ?? "").trim();
 
-      if (baseUrl.isEmpty) return false;
+      print("USER ID: $userId");
+      print("USER ID LENGTH: ${userId.length}");
+
+      if (userId.isEmpty || baseUrl.isEmpty) {
+        print("User ID or Base URL missing");
+        return false;
+      }
 
       final rows = await AppDatabase.getTransactionWithDetails(transactionId);
 
@@ -146,44 +154,50 @@ class ApiService {
             "productId": r['ProductID'],
             "batchNo": r['BatchNo'] ?? "",
             "qty": r['Qty'],
-            "unitPrice": r['UnitPrice'],
-            "totalAmount": r['TotalPrice']
+            "unitPrice": (r['UnitPrice'] as num?)?.toDouble() ?? 0,
+            "totalAmount": (r['TotalPrice'] as num?)?.toDouble() ?? 0,
           });
         }
       }
-
       final body = {
         "userId": userId,
-        "date": header['Date'],
-        "customerId": header['CustomerID'],
-        "type": convertType(header['Type']),
+        "date": DateTime.now().toUtc().toIso8601String(),
+        "customerId": header['CustomerID'] as int,
+        "type": convertType(header['Type'] as String),
         "remarks": header['Remarks'] ?? "",
-        "totalAmount": header['TotalAmount'],
+        "totalAmount": (header['TotalAmount'] as num?)?.toDouble() ?? 0.0,
         "transactionDetails": details
       };
 
-      final url = Uri.parse('$baseUrl/api/Transaction/createTransaction');
+      print("UPLOAD BODY: ${jsonEncode(body)}");
 
+      print("USER ID: $userId");
+      print("TOKEN: ${prefs.getString("headerRef")}");
+      print("DETAIL COUNT: ${details.length}");
+
+      final url = Uri.parse('$baseUrl/api/Transaction/createTransaction');
       final response = await http.post(
         url,
-        headers: {"Content-Type": "application/json"},
+        headers: {
+          "accept": "*/*",
+          "Content-Type": "application/json",
+        },
         body: jsonEncode(body),
       );
+      print("STATUS: ${response.statusCode}");
+      print("RESPONSE: ${response.body}");
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         await AppDatabase.markTransactionSynced(transactionId);
-
         return true;
       } else {
         await AppDatabase.markTransactionFailed(transactionId);
-
         return false;
       }
     } catch (e) {
       print("UPLOAD ERROR: $e");
 
       await AppDatabase.markTransactionFailed(transactionId);
-
       return false;
     }
   }

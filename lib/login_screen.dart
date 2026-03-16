@@ -73,13 +73,13 @@ class _LoginScreenState extends State<LoginScreen> {
 
       if (data['status'] == 'success') {
         final prefs = await SharedPreferences.getInstance();
-
-        String userId = data['userId'] ?? "";
-        String username = data['username'] ?? "";
-
+        final userId = data['userId'] ?? "";
+        if (userId.isEmpty) {
+          _showMessage("Invalid user ID from server");
+          return;
+        }
         await prefs.setString("userId", userId);
-        await prefs.setString("username", username);
-
+        await prefs.setString("username", data['username'] ?? "");
         List towns = data['towns'] ?? [];
 
         List<String> townIds = towns.map((t) => t['id'].toString()).toList();

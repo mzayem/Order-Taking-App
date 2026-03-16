@@ -27,7 +27,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _logout(BuildContext context) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.clear(); // Clear all saved user/session data
+    await prefs.remove("userId"); // Clear all saved user/session data
 
     Navigator.pushAndRemoveUntil(
       context,

@@ -1,4 +1,6 @@
 // lib/screens/home_screen.dart
+import 'dart:developer';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -12,6 +14,8 @@ import 'profile_screen.dart';
 import '../db/database.dart';
 import '../sync/sync_service.dart';
 import '../services/api_service.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -81,6 +85,52 @@ class _OverviewScreenState extends State<OverviewScreen> {
   void initState() {
     super.initState();
     _loadTransactions();
+    // testPushTransaction();
+  }
+
+  Future<void> testPushTransaction() async {
+    try {
+      const baseUrl = "http://app.dmcgroup.pk:2004";
+
+      final url = Uri.parse("$baseUrl/api/Transaction/createTransaction");
+
+      final body = {
+        "userId": "57a85261-fe6b-4865-bfa5-aabfdd771611",
+        "date": DateTime.now().toUtc().toIso8601String(),
+        "customerId": 11807,
+        "type": 0,
+        "remarks": "Test Order",
+        "totalAmount": 140,
+        "transactionDetails": [
+          {
+            "productId": 101002,
+            "batchNo": "",
+            "qty": 10,
+            "unitPrice": 14,
+            "totalAmount": 140
+          }
+        ]
+      };
+
+      print("======= TEST API REQUEST =======");
+      print("URL: $url");
+      print("BODY: ${jsonEncode(body)}");
+
+      final response = await http.post(
+        url,
+        headers: {
+          "accept": "*/*",
+          "Content-Type": "application/json",
+        },
+        body: jsonEncode(body),
+      );
+
+      print("======= TEST API RESPONSE =======");
+      print("STATUS: ${response.statusCode}");
+      print("BODY: ${response.body}");
+    } catch (e) {
+      print("TEST API ERROR: $e");
+    }
   }
 
   Future<void> _loadTransactions() async {
@@ -155,6 +205,8 @@ class _OverviewScreenState extends State<OverviewScreen> {
     });
     final prefs = await SharedPreferences.getInstance();
     final userId = prefs.getString("userId") ?? "";
+    log("USER ID BEFORE UPLOAD: $userId");
+    assert(userId.isNotEmpty, "userId is empty — user is not logged in!");
 
     print("USER ID BEFORE API CALL: $userId");
     final baseUrl = prefs.getString('baseUrl') ?? '';
@@ -164,6 +216,14 @@ class _OverviewScreenState extends State<OverviewScreen> {
     if (baseUrl.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('API URL not configured')),
+      );
+      setState(() => _isUploading = false);
+      return;
+    }
+
+    if (userId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('User ID not found')),
       );
       setState(() => _isUploading = false);
       return;

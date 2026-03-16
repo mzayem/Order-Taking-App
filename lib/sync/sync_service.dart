@@ -1,5 +1,6 @@
 // lib/sync/sync_service.dart
 import 'dart:convert';
+import 'dart:developer';
 import 'dart:io';
 import 'package:http/http.dart' as http;
 
@@ -22,7 +23,7 @@ class SyncService {
       for (final payload in payloadList) {
         print("======= API REQUEST =======");
         print("URL: $url");
-        print("BODY: ${jsonEncode(payload)}");
+        log("BODY: ${jsonEncode(payload)}");
 
         final response = await http.post(
           url,
@@ -30,12 +31,12 @@ class SyncService {
             'accept': '*/*',
             'Content-Type': 'application/json',
           },
-          body: jsonEncode({"request": payload}),
+          body: jsonEncode(payload),
         );
 
-        print("======= API RESPONSE =======");
-        print("STATUS: ${response.statusCode}");
-        print("BODY: ${response.body}");
+        log("======= API RESPONSE =======");
+        log("STATUS: ${response.statusCode}");
+        log("BODY: ${response.body}");
 
         if (response.statusCode == 200 || response.statusCode == 201) {
           final respJson =

@@ -39,7 +39,8 @@ class _SplashscreenState extends State<Splashscreen>
 
     final prefs = await SharedPreferences.getInstance();
     final isUrlSaved = prefs.getBool('isUrlSaved') ?? false;
-    final isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
+    // final isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
+    final isLoggedIn = prefs.getString('userId') ?? "";
 
     await Future.delayed(const Duration(milliseconds: 600));
     if (!mounted) return;
@@ -47,7 +48,7 @@ class _SplashscreenState extends State<Splashscreen>
     if (!isUrlSaved) {
       Navigator.pushReplacement(
           context, MaterialPageRoute(builder: (_) => const UrlSetupScreen()));
-    } else if (isLoggedIn) {
+    } else if (isLoggedIn.isNotEmpty) {
       Navigator.pushReplacement(
           context, MaterialPageRoute(builder: (_) => const HomeScreen()));
     } else {
