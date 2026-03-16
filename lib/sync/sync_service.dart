@@ -16,40 +16,46 @@ class SyncService {
       return {'ok': false, 'error': 'No API URL configured'};
     }
 
-    final url = '$baseUrl/transaction_604281180';
+    final url = Uri.parse("$baseUrl/api/Transaction/createTransaction");
 
     try {
-      final httpClient = HttpClient();
-      final request = await httpClient.postUrl(Uri.parse(url));
+      for (final payload in payloadList) {
+        print("======= API REQUEST =======");
+        print("URL: $url");
+        print("BODY: ${jsonEncode(payload)}");
 
-      request.headers.set('content-type', 'application/json');
-      request.headers.set('accept', 'application/json');
+        final response = await http.post(
+          url,
+          headers: {
+            'accept': '*/*',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({"request": payload}),
+        );
 
-      request.add(utf8.encode(jsonEncode(payloadList)));
-      final response = await request.close();
+        print("======= API RESPONSE =======");
+        print("STATUS: ${response.statusCode}");
+        print("BODY: ${response.body}");
 
-      final respBody = await response.transform(utf8.decoder).join();
-      final respJson = respBody.isNotEmpty ? jsonDecode(respBody) : {};
+        if (response.statusCode == 200 || response.statusCode == 201) {
+          final respJson =
+              response.body.isNotEmpty ? jsonDecode(response.body) : {};
 
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        if (respJson['status'] == 'success') {
           return {'ok': true, 'data': respJson};
         } else {
           return {
             'ok': false,
-            'error': respJson['msg'] ?? respJson['message'] ?? 'Upload failed'
+            'error': 'HTTP ${response.statusCode}',
+            'response': response.body
           };
         }
-      } else if (response.statusCode == 400) {
-        return {
-          'ok': false,
-          'error':
-              'Bad Request: ${respJson['msg'] ?? respJson['message'] ?? respBody}'
-        };
-      } else {
-        return {'ok': false, 'error': 'HTTP ${response.statusCode}: $respBody'};
       }
+
+      return {'ok': false, 'error': 'No transactions to upload'};
     } catch (e) {
+      print("======= API ERROR =======");
+      print(e);
+
       return {'ok': false, 'error': e.toString()};
     }
   }

@@ -1,9 +1,7 @@
 // lib/screens/return_screen.dart
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 import '../db/database.dart';
+import 'services/api_service.dart';
 
 class ReturnScreen extends StatefulWidget {
   final int? transactionId;
@@ -52,76 +50,15 @@ class _ReturnScreenState extends State<ReturnScreen> {
 
   Future<void> _fetchCustomersAndProducts() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final baseUrl = prefs.getString('baseUrl') ?? '';
+      final cust = await ApiService.fetchCustomers();
+      final prod = await ApiService.fetchProducts();
 
-      if (baseUrl.isEmpty) {
-        await _loadCustomersFromDB();
-        await _loadProductsFromDB();
-        return;
-      }
-
-      // Fetch customers
-      try {
-        final resp = await http
-            .get(Uri.parse('$baseUrl/customers_604281180'))
-            .timeout(const Duration(seconds: 10));
-        if (resp.statusCode == 200) {
-          final data = jsonDecode(resp.body);
-          if (data['status'] == 'success' && data['result'] != null) {
-            final list = data['result'] as List;
-            setState(() {
-              customers = list.map((c) => c['Name'] as String).toList();
-            });
-            for (var c in list) {
-              await AppDatabase.upsertCustomer({
-                'CustomerID': c['CustomerId'],
-                'Name': c['Name'],
-                'Town': c['Town'] ?? '',
-              });
-            }
-          }
-        }
-      } catch (_) {
-        await _loadCustomersFromDB();
-      }
-
-      // Fetch products
-      try {
-        final resp = await http
-            .get(Uri.parse('$baseUrl/product_604281180'))
-            .timeout(const Duration(seconds: 10));
-        if (resp.statusCode == 200) {
-          final data = jsonDecode(resp.body);
-          if (data['status'] == 'success' && data['result'] != null) {
-            final list = data['result'] as List;
-            setState(() {
-              products = list
-                  .map((p) => {
-                        'name': p['Name'] as String,
-                        'price': (p['UnitPrice'] as num).toInt(),
-                        'availableQty': p['AvailableQty'] as int,
-                      })
-                  .toList();
-            });
-            for (var p in list) {
-              await AppDatabase.upsertProduct({
-                'ProductID': p['ProductID'],
-                'Name': p['Name'],
-                'Code': p['Code'] ?? '',
-                'UnitPrice': (p['UnitPrice'] as num).toDouble(),
-                'AvailableQty': p['AvailableQty'] as int,
-              });
-            }
-          }
-        }
-      } catch (_) {
-        await _loadProductsFromDB();
-      }
+      setState(() {
+        customers = cust;
+        products = prod;
+      });
     } catch (e) {
-      debugPrint('Error fetching customers/products: $e');
-      await _loadCustomersFromDB();
-      await _loadProductsFromDB();
+      debugPrint("API Error: $e");
     }
   }
 

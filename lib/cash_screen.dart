@@ -1,9 +1,9 @@
 // lib/screens/cash_screen.dart
+
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
+
 import '../db/database.dart';
+import 'services/api_service.dart';
 
 class CashScreen extends StatefulWidget {
   final int? transactionId;
@@ -41,46 +41,11 @@ class _CashScreenState extends State<CashScreen> {
   }
 
   Future<void> _fetchCustomers() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final baseUrl = prefs.getString('baseUrl') ?? '';
+    final customersList = await ApiService.fetchCustomers();
 
-      if (baseUrl.isEmpty) {
-        await _loadCustomersFromDB();
-        return;
-      }
-
-      try {
-        final customerUrl = Uri.parse('$baseUrl/customers_604281180');
-        final response =
-            await http.get(customerUrl).timeout(const Duration(seconds: 10));
-
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          if (data['status'] == 'success' && data['result'] != null) {
-            final custList = data['result'] as List;
-            setState(() {
-              _customers = custList.map((c) => c['Name'] as String).toList();
-            });
-
-            // Cache in DB using upsert
-            for (var cust in custList) {
-              await AppDatabase.upsertCustomer({
-                'CustomerID': cust['CustomerId'],
-                'Name': cust['Name'],
-                'Town': cust['Town'] ?? '',
-              });
-            }
-          }
-        }
-      } catch (e) {
-        debugPrint('Error fetching customers: $e');
-        await _loadCustomersFromDB();
-      }
-    } catch (e) {
-      debugPrint('Error in _fetchCustomers: $e');
-      await _loadCustomersFromDB();
-    }
+    setState(() {
+      _customers = customersList;
+    });
   }
 
   Future<void> _loadCustomersFromDB() async {

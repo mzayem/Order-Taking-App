@@ -73,7 +73,7 @@ class _SplashscreenState extends State<Splashscreen>
             opacity: _fadeAnimation,
             child: ClipOval(
               child: Image.asset('assets/images/splash.png',
-                  width: 200, height: 200, fit: BoxFit.cover),
+                  width: 250, fit: BoxFit.cover),
             ),
           ),
         ),

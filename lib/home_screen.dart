@@ -11,6 +11,7 @@ import 'profile_screen.dart';
 // Local database + Sync
 import '../db/database.dart';
 import '../sync/sync_service.dart';
+import '../services/api_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -106,21 +107,29 @@ class _OverviewScreenState extends State<OverviewScreen> {
 
         // calculate display total: Cash uses CashAmount, others use TotalAmount
         double totalAmount = 0.0;
-        final type = r['Type'] as String? ?? 'Order';
-        final totalField = (r['TotalAmount'] ?? 0.0) as num;
-        final cashField = (r['CashAmount'] ?? 0.0) as num;
-        if (type == 'Cash') {
-          totalAmount = cashField.toDouble();
-        } else {
-          totalAmount = totalField.toDouble();
+        final type = (r['Type'] ?? 'Order').toString();
+
+        final totalField = r['TotalAmount'];
+        final cashField = r['CashAmount'];
+
+        double parseValue(dynamic value) {
+          if (value == null) return 0;
+          if (value is num) return value.toDouble();
+          if (value is String) return double.tryParse(value) ?? 0;
+          return 0;
         }
 
+        if (type == 'Cash') {
+          totalAmount = parseValue(cashField);
+        } else {
+          totalAmount = parseValue(totalField);
+        }
         items.add({
           'transactionId': r['TransactionID'] as int,
           'customer': custName,
           'date':
               DateTime.tryParse(r['Date'] as String? ?? '') ?? DateTime.now(),
-          'total': totalAmount.toInt(),
+          'total': totalAmount,
           'type': type,
           'syncStatus': r['SyncStatus'] as String? ?? 'Pending',
           'uploadedAt': r['SyncStatus'] == 'Synced'
@@ -144,80 +153,96 @@ class _OverviewScreenState extends State<OverviewScreen> {
       _isUploading = true;
       _uploadProgress = 0.0;
     });
-
     final prefs = await SharedPreferences.getInstance();
+    final userId = prefs.getString("userId") ?? "";
+
+    print("USER ID BEFORE API CALL: $userId");
     final baseUrl = prefs.getString('baseUrl') ?? '';
-    final userId = prefs.getInt('userId') ?? 0;
+
     final sync = SyncService(baseUrl);
 
     if (baseUrl.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('API URL not configured.')));
+        const SnackBar(content: Text('API URL not configured')),
+      );
       setState(() => _isUploading = false);
       return;
     }
 
     final ids = _selectedTxIds.toList();
+
     final List<Map<String, dynamic>> transactionsToUpload = [];
 
     for (final id in ids) {
       final rows = await AppDatabase.getTransactionWithDetails(id);
       if (rows.isEmpty) continue;
+
       final header = rows.first;
-      final details = <Map<String, dynamic>>[];
+
+      final List<Map<String, dynamic>> details = [];
+
       for (final r in rows) {
         if (r['TransactionDetailID'] != null) {
           details.add({
-            'product_id': r['ProductID'],
-            'product_name': r['ProductName'],
-            'batch_no': r['BatchNo'],
-            'qty': r['Qty'],
-            'unit_price': r['UnitPrice'],
-            'total_price': r['TotalPrice'],
+            "productId": r['ProductID'],
+            "batchNo": r['BatchNo'] ?? "",
+            "qty": r['Qty'],
+            "unitPrice": r['UnitPrice'],
+            "totalAmount": r['TotalPrice'],
           });
         }
       }
 
+      /// Convert type to API number
+      int typeValue = 0;
+
+      if (header['Type'] == "Cash") {
+        typeValue = 1;
+      } else if (header['Type'] == "Return") {
+        typeValue = 2;
+      } else {
+        typeValue = 0;
+      }
+
       transactionsToUpload.add({
-        'TransactionID': id,
-        'UserID': userId,
-        'CustomerID': header['CustomerID'],
-        'Type': header['Type'],
-        'Date': header['Date'],
-        'TotalAmount': header['TotalAmount'],
-        'CashAmount': header['CashAmount'],
-        'Remarks': header['Remarks'],
-        'SyncStatus': 'Pending',
-        'lines': details,
+        "userId": userId,
+        "date": DateTime.now().toUtc().toIso8601String(),
+        "customerId": header['CustomerID'],
+        "type": typeValue,
+        "remarks": header['Remarks'] ?? "",
+        "totalAmount": header['TotalAmount'] ?? 0,
+        "transactionDetails": details
       });
     }
+
     final res = await sync.uploadTransactions(transactionsToUpload);
 
     if (res['ok'] == true) {
       for (final id in ids) {
         await AppDatabase.markTransactionSynced(id);
       }
-      if (!mounted) return;
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-              "Upload complete: ${ids.length} transactions uploaded successfully"),
-          duration: const Duration(seconds: 3),
+          content: Text("Upload success: ${ids.length} transactions"),
         ),
       );
     } else {
       for (final id in ids) {
         await AppDatabase.markTransactionFailed(id);
       }
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Upload failed: ${res['error']}"),
-          duration: const Duration(seconds: 3),
-        ),
-      );
 
       print("Upload failed: ${res['error']}");
+      print("API response: ${res['response']}");
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            "Upload fail: ${res['error']}\n${res['response'] ?? ''}",
+          ),
+          duration: const Duration(seconds: 4),
+        ),
+      );
     }
 
     await _loadTransactions();
@@ -226,7 +251,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
       _isUploading = false;
       _selectionMode = false;
       _selectedTxIds.clear();
-      _uploadProgress = 0.0;
+      _uploadProgress = 0;
     });
   }
 
@@ -297,8 +322,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
     final type = order['type'] ?? 'Order';
     final date = order['date'] as DateTime;
     final town = order['town'] ?? '';
-    final total = order['total'] ?? 0;
-
+    final total = (order['total'] ?? 0) as num;
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
       child: Material(
@@ -379,9 +403,13 @@ class _OverviewScreenState extends State<OverviewScreen> {
                     ]),
               ),
               Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                Text("Rs.$total",
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 16)),
+                Text(
+                  "Rs.${(total as num).toStringAsFixed(0)}",
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
                 const SizedBox(height: 8),
                 const Text("AMOUNT",
                     style: TextStyle(color: Colors.grey, fontSize: 11)),
@@ -390,6 +418,88 @@ class _OverviewScreenState extends State<OverviewScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  void _showClearDialog() {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.warning_amber_rounded,
+                  size: 50,
+                  color: Colors.orange,
+                ),
+                const SizedBox(height: 15),
+                const Text(
+                  "Clear Data",
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                const Text(
+                  "Are you sure you want to delete all transactions?",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 15),
+                ),
+                const SizedBox(height: 25),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                      onPressed: () {
+                        Navigator.pop(context);
+                      },
+                      child: const Text("Cancel",
+                          style: TextStyle(color: Colors.white)),
+                    ),
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                      onPressed: () async {
+                        await AppDatabase.deleteDatabaseFile();
+                        await AppDatabase.init();
+                        await _loadTransactions();
+
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text("Data cleared successfully"),
+                          ),
+                        );
+
+                        setState(() {});
+                      },
+                      child: const Text("Delete",
+                          style: TextStyle(color: Colors.white)),
+                    ),
+                  ],
+                )
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -537,7 +647,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
                               ),
                             ),
                             Text(
-                              'Rs.${type == 'Cash' ? cashAmount : totalAmount}',
+                              'Rs.${(type == 'Cash' ? cashAmount : totalAmount).toStringAsFixed(0)}',
                               style: const TextStyle(
                                   fontWeight: FontWeight.bold,
                                   color: Colors.teal),
@@ -694,33 +804,75 @@ class _OverviewScreenState extends State<OverviewScreen> {
     final showUploadFab =
         _selectionMode && _selectedTxIds.isNotEmpty && !_isUploading;
 
-    final orderTotal = _transactions.fold<int>(
-        0, (sum, t) => sum + (t['type'] == 'Order' ? (t['total'] as int) : 0));
-    final cashTotal = _transactions.fold<int>(
-        0, (sum, t) => sum + (t['type'] == 'Cash' ? (t['total'] as int) : 0));
+    final orderTotal = _transactions.fold<double>(
+      0.0,
+      (sum, t) =>
+          sum +
+          (t['type'] == 'Order' ? ((t['total'] ?? 0) as num).toDouble() : 0.0),
+    );
 
+    final cashTotal = _transactions.fold<double>(
+      0.0,
+      (sum, t) =>
+          sum +
+          (t['type'] == 'Cash' ? ((t['total'] ?? 0) as num).toDouble() : 0.0),
+    );
     return Scaffold(
       backgroundColor: Colors.grey[100],
       appBar: AppBar(
-        title: Text(_selectionMode
-            ? "${_selectedTxIds.length} Selected"
-            : _formatDayDate(headerDate)),
+        title: Text(
+          _selectionMode
+              ? "${_selectedTxIds.length} Selected"
+              : _formatDayDate(headerDate),
+        ),
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         actions: [
+          /// Sync Button (only when not selecting)
+          if (!_selectionMode)
+            IconButton(
+              icon: const Icon(Icons.sync),
+              tooltip: "Sync Transactions",
+              onPressed: () async {
+                showDialog(
+                  context: context,
+                  barrierDismissible: false,
+                  builder: (_) => const Center(
+                    child: CircularProgressIndicator(),
+                  ),
+                );
+
+                int synced = await ApiService.syncAllTransactions();
+
+                Navigator.pop(context);
+
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text("$synced transactions synced")),
+                );
+
+                _loadTransactions();
+              },
+            ),
+
+          /// Edit Button (only if 1 selected)
           if (_selectionMode && _selectedTxIds.length == 1)
             IconButton(
               icon: const Icon(Icons.edit),
               tooltip: 'Edit selected',
               onPressed: _onEditSelected,
             ),
+
+          /// Close Selection Mode
           if (_selectionMode)
             IconButton(
               icon: const Icon(Icons.close),
-              onPressed: () => setState(() {
-                _selectionMode = false;
-                _selectedTxIds.clear();
-              }),
+              tooltip: "Cancel Selection",
+              onPressed: () {
+                setState(() {
+                  _selectionMode = false;
+                  _selectedTxIds.clear();
+                });
+              },
             ),
         ],
       ),
@@ -791,12 +943,8 @@ class _OverviewScreenState extends State<OverviewScreen> {
                         style: TextStyle(color: Colors.white))),
                 const SizedBox(height: 10),
                 ElevatedButton(
-                    onPressed: () async {
-                      await AppDatabase.deleteDatabaseFile();
-                      await AppDatabase.init();
-                      await _loadTransactions();
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                          content: Text('Local DB reset (dev)')));
+                    onPressed: () {
+                      _showClearDialog();
                     },
                     style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.red,

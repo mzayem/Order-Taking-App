@@ -1,13 +1,14 @@
+import 'dart:convert';
+import 'dart:async';
+import 'package:dmc/url_setup.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
-import 'package:sqflite/sqflite.dart';
-import 'dart:convert';
-import '../db/database.dart';
 import 'home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
+
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
@@ -15,181 +16,277 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final emailController = TextEditingController();
   final passwordController = TextEditingController();
+
   bool isPasswordVisible = false;
   bool isLoggingIn = false;
 
   Future<void> _performLogin() async {
-    final email = emailController.text.trim();
+    final username = emailController.text.trim();
     final password = passwordController.text.trim();
-    if (email.isEmpty || password.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Please enter email and password")));
+
+    if (username.isEmpty || password.isEmpty) {
+      _showMessage("Enter username and password");
       return;
     }
-    setState(() => isLoggingIn = true);
+
+    setState(() {
+      isLoggingIn = true;
+    });
 
     try {
       final prefs = await SharedPreferences.getInstance();
       final baseUrl = prefs.getString('baseUrl') ?? '';
+
       if (baseUrl.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("API URL not configured")));
-        setState(() => isLoggingIn = false);
+        _showMessage("API URL not configured");
         return;
       }
 
+      final url = "$baseUrl/api/User/login";
+
+      print("BASE URL: $baseUrl");
+      print("LOGIN URL : $url");
+
       final response = await http
-          .get(Uri.parse('$baseUrl/user_604281180'))
-          .timeout(const Duration(seconds: 10));
+          .post(
+            Uri.parse(url),
+            headers: {
+              "accept": "*/*",
+              "Content-Type": "application/json",
+            },
+            body: jsonEncode({
+              "username": username,
+              "password": password,
+            }),
+          )
+          .timeout(const Duration(seconds: 20));
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (data['status'] == 'success' && data['result'] != null) {
-          final users = data['result'] as List;
-          final authenticatedUser = users.firstWhere(
-            (u) => u['Name'].toString().toLowerCase() == email.toLowerCase(),
-            orElse: () => <String, dynamic>{},
-          );
-          if (authenticatedUser.isNotEmpty) {
-            await prefs.setBool('isLoggedIn', true);
-            await prefs.setString('username', authenticatedUser['Name']);
-            await prefs.setInt('userId', authenticatedUser['UserID']);
-            await prefs.setString('userRole', authenticatedUser['Role']);
-            await prefs.setString('userTown', authenticatedUser['Town'] ?? '');
+      print("STATUS CODE : ${response.statusCode}");
+      print("RESPONSE : ${response.body}");
 
-            // Upsert user locally
-            final db = await AppDatabase.init();
-            await db.insert(
-                'User',
-                {
-                  'UserID': authenticatedUser['UserID'],
-                  'Name': authenticatedUser['Name'],
-                  'Town': authenticatedUser['Town'] ?? '',
-                  'Role': authenticatedUser['Role'],
-                },
-                conflictAlgorithm: ConflictAlgorithm.replace);
+      if (response.statusCode != 200) {
+        _showMessage("Server error : ${response.statusCode}");
+        return;
+      }
 
-            // Fetch and upsert customers
-            await _fetchAndCacheCustomers(baseUrl);
+      final data = jsonDecode(response.body);
 
-            if (!mounted) return;
-            Navigator.pushReplacement(
-                context, MaterialPageRoute(builder: (_) => const HomeScreen()));
-          } else {
-            if (!mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text("Invalid credentials")));
-          }
-        } else {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context)
-              .showSnackBar(const SnackBar(content: Text("Login failed")));
-        }
-      } else {
+      if (data['status'] == 'success') {
+        final prefs = await SharedPreferences.getInstance();
+
+        String userId = data['userId'] ?? "";
+        String username = data['username'] ?? "";
+
+        await prefs.setString("userId", userId);
+        await prefs.setString("username", username);
+
+        List towns = data['towns'] ?? [];
+
+        List<String> townIds = towns.map((t) => t['id'].toString()).toList();
+
+        await prefs.setStringList("townIds", townIds);
+
+        print("Saved USER ID: $userId");
+        print("Saved USER NAME: $username");
+        print("Saved townIds: $townIds");
+
         if (!mounted) return;
+
         ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("Server error: ${response.statusCode}")));
+          const SnackBar(
+            content: Text("Login Successful"),
+            backgroundColor: Colors.green,
+          ),
+        );
+
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const HomeScreen()),
+        );
       }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text("Error: $e")));
+
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const HomeScreen()),
+      );
+    }
+
+    /// Timeout
+    on TimeoutException catch (e) {
+      print("TIMEOUT ERROR: $e");
+      _showMessage("Connection timeout. Server not responding.");
+    }
+
+    /// Network issue
+    on http.ClientException catch (e) {
+      print("CLIENT ERROR: $e");
+      _showMessage("Unable to connect to server.");
+    }
+
+    /// Any other error
+    catch (e) {
+      print("LOGIN ERROR: $e");
+      _showMessage("Unexpected error occurred.");
     } finally {
-      if (mounted) setState(() => isLoggingIn = false);
+      if (mounted) {
+        setState(() {
+          isLoggingIn = false;
+        });
+      }
     }
   }
 
-  Future<void> _fetchAndCacheCustomers(String baseUrl) async {
-    try {
-      final response = await http
-          .get(Uri.parse('$baseUrl/customers_604281180'))
-          .timeout(const Duration(seconds: 10));
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (data['status'] == 'success' && data['result'] != null) {
-          final list = data['result'] as List;
-          for (var cust in list) {
-            await AppDatabase.upsertCustomer({
-              'CustomerID': cust['CustomerId'],
-              'Name': cust['Name'],
-              'Town': cust['Town'] ?? '',
-            });
-          }
-        }
-      }
-    } catch (e) {
-      debugPrint('Error fetching customers: $e');
-    }
+  void _showMessage(String msg) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
+
+  @override
+  void dispose() {
+    emailController.dispose();
+    passwordController.dispose();
+    super.dispose();
+  }
+
+  // Future<void> loginUser() async {
+  //   final url = Uri.parse('http://app.dmcgroup.pk:2004/api/User/login');
+
+  //   try {
+  //     final response = await http.post(
+  //       url,
+  //       headers: {
+  //         'accept': '*/*',
+  //         'Content-Type': 'application/json',
+  //       },
+  //       body: jsonEncode({"username": "aliraza", "password": "Chmzayem789@"}),
+  //     );
+
+  //     // Log status code
+  //     print("Status Code: ${response.statusCode}");
+
+  //     // Log raw response
+  //     print("Response Body: ${response.body}");
+
+  //     // If JSON response
+  //     final data = jsonDecode(response.body);
+  //     print("Decoded Response: $data");
+  //   } catch (e) {
+  //     print("API Error: $e");
+  //   }
+  // }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.black),
+          onPressed: () {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (_) => const UrlSetupScreen()),
+            );
+          },
+        ),
+      ),
       body: SafeArea(
         child: Center(
-          child: Padding(
+          child: SingleChildScrollView(
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 ClipOval(
-                  child: Image.asset('assets/images/splash.png',
-                      width: 200, height: 200, fit: BoxFit.cover),
+                  child: Image.asset(
+                    'assets/images/splash.png',
+                    width: 250,
+                    fit: BoxFit.cover,
+                  ),
                 ),
+
                 const SizedBox(height: 20),
-                const Text("Login",
-                    style:
-                        TextStyle(fontSize: 28, fontWeight: FontWeight.w500)),
+
+                // InkWell(
+                //   onTap: () {
+                //     loginUser();
+                //   },
+                // child:
+                Text(
+                  "Login",
+                  style: TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                // ),
+
                 const SizedBox(height: 30),
+
+                /// Username
                 TextField(
                   controller: emailController,
-                  keyboardType: TextInputType.emailAddress,
                   decoration: InputDecoration(
-                      hintText: "Email",
-                      prefixIcon: const Icon(Icons.email_outlined, size: 20),
-                      border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(6)),
-                      contentPadding: const EdgeInsets.symmetric(
-                          vertical: 14, horizontal: 12)),
+                    hintText: "Username",
+                    prefixIcon: const Icon(Icons.person_outline, size: 20),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  ),
                 ),
+
                 const SizedBox(height: 20),
+
+                /// Password
                 TextField(
                   controller: passwordController,
                   obscureText: !isPasswordVisible,
                   decoration: InputDecoration(
-                      hintText: "Password",
-                      prefixIcon: const Icon(Icons.lock_outline, size: 20),
-                      suffixIcon: IconButton(
-                          icon: Icon(isPasswordVisible
-                              ? Icons.visibility
-                              : Icons.visibility_off),
-                          onPressed: () => setState(
-                              () => isPasswordVisible = !isPasswordVisible)),
-                      border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(6)),
-                      contentPadding: const EdgeInsets.symmetric(
-                          vertical: 14, horizontal: 12)),
+                    hintText: "Password",
+                    prefixIcon: const Icon(Icons.lock_outline, size: 20),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        isPasswordVisible
+                            ? Icons.visibility
+                            : Icons.visibility_off,
+                      ),
+                      onPressed: () {
+                        setState(() {
+                          isPasswordVisible = !isPasswordVisible;
+                        });
+                      },
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  ),
                 ),
+
                 const SizedBox(height: 25),
+
                 SizedBox(
                   width: double.infinity,
                   height: 48,
                   child: ElevatedButton(
                     style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.black,
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(6))),
+                      backgroundColor: Colors.black,
+                    ),
                     onPressed: isLoggingIn ? null : _performLogin,
                     child: isLoggingIn
                         ? const SizedBox(
                             height: 20,
                             width: 20,
                             child: CircularProgressIndicator(
-                                color: Colors.white, strokeWidth: 2))
-                        : const Text("Login",
-                            style:
-                                TextStyle(fontSize: 16, color: Colors.white)),
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : const Text(
+                            "Login",
+                            style: TextStyle(fontSize: 16, color: Colors.white),
+                          ),
                   ),
                 ),
               ],
