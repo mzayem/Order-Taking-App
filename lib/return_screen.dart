@@ -307,7 +307,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
         contentPadding:
             const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
         border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
+            // borderRadius: BorderRadius.circular(12),
             borderSide: const BorderSide(color: Color(0xFFEBEBEB))),
         enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
@@ -367,7 +367,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
                     controller: controller,
                     focusNode: focusNode,
                     onEditingComplete: onEditingComplete,
-                    decoration: _inputDecoration("Select Customer"),
+                    decoration: _inputDecoration("Select Customer..."),
                     onChanged: (val) {
                       setState(() {
                         selectedCustomer = val;
@@ -382,35 +382,41 @@ class _ReturnScreenState extends State<ReturnScreen> {
                 },
               ),
               const SizedBox(height: 16),
-              const Text("Select Product",
-                  style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 6),
               Autocomplete<Map<String, dynamic>>(
-                displayStringForOption: (option) => option['name'],
+                initialValue: selectedProduct != null
+                    ? TextEditingValue(text: selectedProduct!['name'])
+                    : const TextEditingValue(),
                 optionsBuilder: (TextEditingValue textEditingValue) {
                   if (textEditingValue.text.isEmpty) {
-                    return const Iterable<Map<String, dynamic>>.empty();
+                    return products;
                   }
-
                   return products.where((p) => p['name']
                       .toLowerCase()
                       .contains(textEditingValue.text.toLowerCase()));
                 },
-                onSelected: (selection) {
-                  setState(() => selectedProduct = selection);
-                },
+                displayStringForOption: (p) =>
+                    "${p['name']}  (Available: ${p['availableQty']})",
                 fieldViewBuilder:
-                    (context, controller, focusNode, onFieldSubmitted) {
-                  controller.text = selectedProduct?['name'] ?? '';
-
+                    (context, controller, focusNode, onEditingComplete) {
                   return TextField(
                     controller: controller,
                     focusNode: focusNode,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      hintText: "Search Product...",
-                    ),
+                    onEditingComplete: onEditingComplete,
+                    decoration: _inputDecoration("Select Product...."),
+                    onChanged: (val) {
+                      final found = products.firstWhere(
+                          (p) => p['name'].toLowerCase() == val.toLowerCase(),
+                          orElse: () => {});
+                      setState(() {
+                        selectedProduct = found.isNotEmpty ? found : null;
+                      });
+                    },
                   );
+                },
+                onSelected: (p) {
+                  setState(() {
+                    selectedProduct = p;
+                  });
                 },
               ),
               const SizedBox(height: 16),

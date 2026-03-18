@@ -83,9 +83,10 @@ class _LoginScreenState extends State<LoginScreen> {
         List towns = data['towns'] ?? [];
 
         List<String> townIds = towns.map((t) => t['id'].toString()).toList();
-
+        List<String> townNames =
+            towns.map((t) => t['name'].toString()).toList();
         await prefs.setStringList("townIds", townIds);
-
+        await prefs.setStringList("townNames", townNames);
         print("Saved USER ID: $userId");
         print("Saved USER NAME: $username");
         print("Saved townIds: $townIds");

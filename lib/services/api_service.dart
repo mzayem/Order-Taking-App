@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:path/path.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../db/database.dart';
 
@@ -213,7 +212,63 @@ class ApiService {
     }
   }
 
-  /// -----------------------------
+  /// ------------------------------------------------------------------
+  /// UPLOAD MULTIPLE TRANSACTIONS (Bulk)
+  /// ------------------------------------------------------------------
+  static Future<Map<String, dynamic>> uploadTransactions({
+    required String baseUrl,
+    required String userId,
+    required List<Map<String, dynamic>> dataList,
+  }) async {
+    if (baseUrl.isEmpty) {
+      return {'ok': false, 'error': 'No API URL configured'};
+    }
+    if (dataList.isEmpty) {
+      return {'ok': false, 'error': 'No transactions to upload'};
+    }
+
+    final url = Uri.parse('$baseUrl/api/Transaction/createTransaction');
+
+    final body = {
+      'userId': userId,
+      'data': dataList,
+    };
+
+    debugPrint('======= API REQUEST =======');
+    debugPrint('URL: $url');
+    debugPrint('BODY: ${jsonEncode(body)}');
+
+    try {
+      final response = await http.post(
+        url,
+        headers: {
+          'accept': '*/*',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode(body),
+      );
+
+      debugPrint('======= API RESPONSE =======');
+      debugPrint('STATUS: ${response.statusCode}');
+      debugPrint('BODY: ${response.body}');
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final respJson =
+            response.body.isNotEmpty ? jsonDecode(response.body) : {};
+        return {'ok': true, 'data': respJson};
+      } else {
+        return {
+          'ok': false,
+          'error': 'HTTP ${response.statusCode}',
+          'response': response.body,
+        };
+      }
+    } catch (e) {
+      debugPrint('======= API ERROR =======');
+      debugPrint(e.toString());
+      return {'ok': false, 'error': e.toString()};
+    }
+  }
 
   /// -----------------------------
   /// LOCAL DB FALLBACK CUSTOMERS

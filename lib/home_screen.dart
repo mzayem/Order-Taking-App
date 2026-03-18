@@ -1,5 +1,4 @@
 // lib/screens/home_screen.dart
-import 'dart:developer';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -12,7 +11,6 @@ import 'profile_screen.dart';
 
 // Local database + Sync
 import '../db/database.dart';
-import '../sync/sync_service.dart';
 import '../services/api_service.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -359,21 +357,15 @@ class _OverviewScreenState extends State<OverviewScreen> {
           productStatus.value = 1; // Success
         } else {
           productStatus.value = -1;
-          if (errorMessage.value == null) {
-            errorMessage.value = "Failed to parse Product JSON";
-          }
+          errorMessage.value ??= "Failed to parse Product JSON";
         }
       } else {
         productStatus.value = -1;
-        if (errorMessage.value == null) {
-          errorMessage.value = "Product API Error: ${response.statusCode}";
-        }
+        errorMessage.value ??= "Product API Error: ${response.statusCode}";
       }
     } catch (e) {
       productStatus.value = -1;
-      if (errorMessage.value == null) {
-        errorMessage.value = "Product Network Error";
-      }
+      errorMessage.value ??= "Product Network Error";
       debugPrint("Product fetch error: $e");
     }
 
@@ -389,50 +381,50 @@ class _OverviewScreenState extends State<OverviewScreen> {
     // _loadLocalData();
   }
 
-  Future<void> testPushTransaction() async {
-    try {
-      const baseUrl = "http://app.dmcgroup.pk:2004";
+  // Future<void> testPushTransaction() async {
+  //   try {
+  //     const baseUrl = "http://app.dmcgroup.pk:2004";
 
-      final url = Uri.parse("$baseUrl/api/Transaction/createTransaction");
+  //     final url = Uri.parse("$baseUrl/api/Transaction/createTransaction");
 
-      final body = {
-        "userId": "57a85261-fe6b-4865-bfa5-aabfdd771611",
-        "date": DateTime.now().toUtc().toIso8601String(),
-        "customerId": 11807,
-        "type": 0,
-        "remarks": "Test Order",
-        "totalAmount": 140,
-        "transactionDetails": [
-          {
-            "productId": 101002,
-            "batchNo": "",
-            "qty": 10,
-            "unitPrice": 14,
-            "totalAmount": 140
-          }
-        ]
-      };
+  //     final body = {
+  //       "userId": "57a85261-fe6b-4865-bfa5-aabfdd771611",
+  //       "date": DateTime.now().toUtc().toIso8601String(),
+  //       "customerId": 11807,
+  //       "type": 0,
+  //       "remarks": "Test Order",
+  //       "totalAmount": 140,
+  //       "transactionDetails": [
+  //         {
+  //           "productId": 101002,
+  //           "batchNo": "",
+  //           "qty": 10,
+  //           "unitPrice": 14,
+  //           "totalAmount": 140
+  //         }
+  //       ]
+  //     };
 
-      print("======= TEST API REQUEST =======");
-      print("URL: $url");
-      print("BODY: ${jsonEncode(body)}");
+  //     print("======= TEST API REQUEST =======");
+  //     print("URL: $url");
+  //     print("BODY: ${jsonEncode(body)}");
 
-      final response = await http.post(
-        url,
-        headers: {
-          "accept": "*/*",
-          "Content-Type": "application/json",
-        },
-        body: jsonEncode(body),
-      );
+  //     final response = await http.post(
+  //       url,
+  //       headers: {
+  //         "accept": "*/*",
+  //         "Content-Type": "application/json",
+  //       },
+  //       body: jsonEncode(body),
+  //     );
 
-      print("======= TEST API RESPONSE =======");
-      print("STATUS: ${response.statusCode}");
-      print("BODY: ${response.body}");
-    } catch (e) {
-      print("TEST API ERROR: $e");
-    }
-  }
+  //     print("======= TEST API RESPONSE =======");
+  //     print("STATUS: ${response.statusCode}");
+  //     print("BODY: ${response.body}");
+  //   } catch (e) {
+  //     print("TEST API ERROR: $e");
+  //   }
+  // }
 
   Future<void> _loadTransactions() async {
     try {
@@ -575,10 +567,13 @@ class _OverviewScreenState extends State<OverviewScreen> {
       return;
     }
 
-    final sync = SyncService(baseUrl);
-    final res = await sync.uploadTransactions(userId, dataList);
+    final syncRes = await ApiService.uploadTransactions(
+      baseUrl: baseUrl,
+      userId: userId,
+      dataList: dataList,
+    );
 
-    if (res['ok'] == true) {
+    if (syncRes['ok'] == true) {
       for (final id in ids) {
         await AppDatabase.markTransactionSynced(id);
       }
@@ -589,11 +584,12 @@ class _OverviewScreenState extends State<OverviewScreen> {
       for (final id in ids) {
         await AppDatabase.markTransactionFailed(id);
       }
-      debugPrint('Upload failed: ${res['error']}');
-      debugPrint('API response: ${res['response']}');
+      debugPrint('Upload failed: ${syncRes['error']}');
+      debugPrint('API response: ${syncRes['response']}');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Upload fail: ${res['error']}\n${res['response'] ?? ''}'),
+          content: Text(
+              'Upload fail: ${syncRes['error']}\n${syncRes['response'] ?? ''}'),
           duration: const Duration(seconds: 4),
         ),
       );
@@ -761,7 +757,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
               ),
               Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                 Text(
-                  "Rs.${(total as num).toStringAsFixed(0)}",
+                  "Rs.${(total).toStringAsFixed(0)}",
                   style: const TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 16,
