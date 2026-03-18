@@ -65,6 +65,8 @@ class SyncService {
     }
   }
 
+// error need to find keyword name 'message' response body
+
   /// Fetch sync data from server
   Future<Map<String, dynamic>> fetchSyncData() async {
     if (baseUrl.isEmpty) {

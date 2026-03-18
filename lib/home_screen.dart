@@ -288,6 +288,8 @@ class _OverviewScreenState extends State<OverviewScreen> {
     }
 
     // ------------------- CUSTOMERS -------------------
+
+    // need to use api service function
     if (townIds.isNotEmpty) {
       try {
         final response = await http
@@ -319,7 +321,8 @@ class _OverviewScreenState extends State<OverviewScreen> {
           }
         } else {
           customerStatus.value = -1;
-          errorMessage.value = "Customer API Error: ${response.statusCode}";
+          errorMessage.value =
+              "Customer API Error: ${response.statusCode}"; // need to added message
         }
       } catch (e) {
         customerStatus.value = -1;
@@ -350,7 +353,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
             await AppDatabase.upsertProduct({
               'ProductID': p['productId'] ?? 0,
               'Name': p['productName']?.toString() ?? '',
-              'Code': (p['productId'] ?? 0).toString(),
+              'Code': (p['productId'] ?? 0).toString(), // need clarification
               'ProductType': p['productType']?.toString() ?? 'Medicine',
               'UnitPrice': ((p['latestPrice'] ?? 0) as num).toDouble(),
               'AvailableQty': p['totalQty'] ?? 0,
@@ -365,7 +368,10 @@ class _OverviewScreenState extends State<OverviewScreen> {
         }
       } else {
         productStatus.value = -1;
-        if (errorMessage.value == null) {
+        var errorRes = jsonDecode(response.body) as Map<String, dynamic>?;
+        if (errorRes?['message'] != null) {
+          errorMessage.value = "Product API Error: ${errorRes!['message']}";
+        } else {
           errorMessage.value = "Product API Error: ${response.statusCode}";
         }
       }
@@ -389,50 +395,50 @@ class _OverviewScreenState extends State<OverviewScreen> {
     // _loadLocalData();
   }
 
-  Future<void> testPushTransaction() async {
-    try {
-      const baseUrl = "http://app.dmcgroup.pk:2004";
+  // Future<void> testPushTransaction() async {
+  //   try {
+  //     const baseUrl = "http://app.dmcgroup.pk:2004";
 
-      final url = Uri.parse("$baseUrl/api/Transaction/createTransaction");
+  //     final url = Uri.parse("$baseUrl/api/Transaction/createTransaction");
 
-      final body = {
-        "userId": "57a85261-fe6b-4865-bfa5-aabfdd771611",
-        "date": DateTime.now().toUtc().toIso8601String(),
-        "customerId": 11807,
-        "type": 0,
-        "remarks": "Test Order",
-        "totalAmount": 140,
-        "transactionDetails": [
-          {
-            "productId": 101002,
-            "batchNo": "",
-            "qty": 10,
-            "unitPrice": 14,
-            "totalAmount": 140
-          }
-        ]
-      };
+  //     final body = {
+  //       "userId": "57a85261-fe6b-4865-bfa5-aabfdd771611",
+  //       "date": DateTime.now().toUtc().toIso8601String(),
+  //       "customerId": 11807,
+  //       "type": 0,
+  //       "remarks": "Test Order",
+  //       "totalAmount": 140,
+  //       "transactionDetails": [
+  //         {
+  //           "productId": 101002,
+  //           "batchNo": "",
+  //           "qty": 10,
+  //           "unitPrice": 14,
+  //           "totalAmount": 140
+  //         }
+  //       ]
+  //     };
 
-      print("======= TEST API REQUEST =======");
-      print("URL: $url");
-      print("BODY: ${jsonEncode(body)}");
+  //     print("======= TEST API REQUEST =======");
+  //     print("URL: $url");
+  //     print("BODY: ${jsonEncode(body)}");
 
-      final response = await http.post(
-        url,
-        headers: {
-          "accept": "*/*",
-          "Content-Type": "application/json",
-        },
-        body: jsonEncode(body),
-      );
+  //     final response = await http.post(
+  //       url,
+  //       headers: {
+  //         "accept": "*/*",
+  //         "Content-Type": "application/json",
+  //       },
+  //       body: jsonEncode(body),
+  //     );
 
-      print("======= TEST API RESPONSE =======");
-      print("STATUS: ${response.statusCode}");
-      print("BODY: ${response.body}");
-    } catch (e) {
-      print("TEST API ERROR: $e");
-    }
-  }
+  //     print("======= TEST API RESPONSE =======");
+  //     print("STATUS: ${response.statusCode}");
+  //     print("BODY: ${response.body}");
+  //   } catch (e) {
+  //     print("TEST API ERROR: $e");
+  //   }
+  // }
 
   Future<void> _loadTransactions() async {
     try {
@@ -593,7 +599,8 @@ class _OverviewScreenState extends State<OverviewScreen> {
       debugPrint('API response: ${res['response']}');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Upload fail: ${res['error']}\n${res['response'] ?? ''}'),
+          content:
+              Text('Upload fail: ${res['error']}\n${res['response'] ?? ''}'),
           duration: const Duration(seconds: 4),
         ),
       );

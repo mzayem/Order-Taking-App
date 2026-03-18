@@ -55,6 +55,7 @@ class ApiService {
 
         List<String> customers = [];
 
+        // is isNarcoticsAllowed should be added to the API response and handled in order creation
         for (var c in list) {
           customers.add(c['customerName']);
 
@@ -62,6 +63,8 @@ class ApiService {
             'CustomerID': c['customerId'],
             'Name': c['customerName'],
             'Town': c['townName'] ?? '',
+            'IsNarcoticsAllowed': c['isNarcoticsAllowed'] ??
+                false, // need to be added in DataBase
           });
         }
 
@@ -81,6 +84,7 @@ class ApiService {
     try {
       final prefs = await SharedPreferences.getInstance();
       final baseUrl = prefs.getString('baseUrl') ?? '';
+      final userId = prefs.getString('userId') ?? '';
 
       if (baseUrl.isEmpty) {
         return await _productsFromDB();
@@ -88,7 +92,13 @@ class ApiService {
 
       final url = Uri.parse('$baseUrl/api/Product/productFetch');
 
-      final response = await http.get(url);
+      final response = await http.post(
+        url,
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "userId": userId,
+        }),
+      );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -97,19 +107,22 @@ class ApiService {
 
         List<Map<String, dynamic>> products = [];
 
+        // Product Type from API should be added like Narcotics || Medicine
         for (var p in list) {
           products.add({
             "name": p['productName'],
             "price": (p['latestPrice'] as num).toDouble(),
+            "type": p['productType'],
             "availableQty": p['totalQty']
           });
 
           await AppDatabase.upsertProduct({
             'ProductID': p['productId'],
             'Name': p['productName'],
-            'Code': '',
+            'Code': '', // why?
             'UnitPrice': (p['latestPrice'] as num).toDouble(),
             'AvailableQty': p['totalQty'],
+            'Type': p['productType'], // need to be added
           });
         }
 
@@ -160,7 +173,7 @@ class ApiService {
   }
 
   /// ------------------------------------------------------------------
-  /// UPLOAD SINGLE TRANSACTION
+  /// UPLOAD Multiple TRANSACTION
   /// Wraps the transaction in the `data` array as required by the API.
   /// ------------------------------------------------------------------
   static Future<bool> uploadTransaction(int transactionId) async {
