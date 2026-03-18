@@ -15,12 +15,6 @@ class _ReturnScreenState extends State<ReturnScreen> {
   List<String> customers = [];
   List<Map<String, dynamic>> products = [];
 
-  final Map<String, List<String>> productBatches = {
-    "Product A": ["A-1001", "A-1002", "A-1003"],
-    "Product B": ["B-2001", "B-2002"],
-    "Product C": ["C-3001"]
-  };
-
   String? selectedCustomer;
   Map<String, dynamic>? selectedProduct;
   final TextEditingController qtyController = TextEditingController();
@@ -32,6 +26,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
   bool _isLoading = false;
   bool _isSaving = false;
   bool _isLoadingData = true;
+  bool _isCheckingBatch = false;
 
   @override
   void initState() {
@@ -125,7 +120,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
     }
   }
 
-  void addProduct() {
+  Future<void> addProduct() async {
     if (selectedCustomer == null) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Please select a customer")));
@@ -150,13 +145,45 @@ class _ReturnScreenState extends State<ReturnScreen> {
           .showSnackBar(const SnackBar(content: Text("Enter batch number")));
       return;
     }
-    final productName = selectedProduct!['name'] as String;
-    final allowedBatches = productBatches[productName] ?? [];
-    if (!allowedBatches.contains(batchText)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("This batch is not from our company")));
-      return;
+
+    // ── Batch API check ──────────────────────────────────────────────────────
+    setState(() => _isCheckingBatch = true);
+    try {
+      final db = await AppDatabase.init();
+
+      // Resolve ProductID from local DB
+      final productName = selectedProduct!['name'] as String;
+      final prodRows = await db.query('Product',
+          where: 'Name = ?', whereArgs: [productName], limit: 1);
+      final productId =
+          prodRows.isNotEmpty ? (prodRows.first['ProductID'] as int) : 0;
+
+      // Resolve CustomerID from local DB
+      final custRows = await db.query('Customer',
+          where: 'Name = ?', whereArgs: [selectedCustomer!], limit: 1);
+      final customerId =
+          custRows.isNotEmpty ? (custRows.first['CustomerID'] as int) : 0;
+
+      final result = await ApiService.checkBatch(
+        productId: productId,
+        batchNo: batchText,
+        customerId: customerId,
+      );
+
+      if (!result['valid']) {
+        final msg = result['message'] as String? ?? 'Invalid batch number';
+        debugPrint('checkBatch failed: $msg');
+        if (!mounted) return;
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(msg)));
+        return;
+      }
+    } finally {
+      if (mounted) setState(() => _isCheckingBatch = false);
     }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    final productName = selectedProduct!['name'] as String;
     final qty = int.parse(qtyText);
     final available = selectedProduct!['availableQty'] as int;
     if (qty > available) {
@@ -336,7 +363,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
                 },
                 fieldViewBuilder:
                     (context, controller, focusNode, onEditingComplete) {
-                  return TextFormField(
+                  return TextField(
                     controller: controller,
                     focusNode: focusNode,
                     onEditingComplete: onEditingComplete,
@@ -355,41 +382,35 @@ class _ReturnScreenState extends State<ReturnScreen> {
                 },
               ),
               const SizedBox(height: 16),
+              const Text("Select Product",
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
               Autocomplete<Map<String, dynamic>>(
-                initialValue: selectedProduct != null
-                    ? TextEditingValue(text: selectedProduct!['name'])
-                    : const TextEditingValue(),
+                displayStringForOption: (option) => option['name'],
                 optionsBuilder: (TextEditingValue textEditingValue) {
                   if (textEditingValue.text.isEmpty) {
-                    return products;
+                    return const Iterable<Map<String, dynamic>>.empty();
                   }
+
                   return products.where((p) => p['name']
                       .toLowerCase()
                       .contains(textEditingValue.text.toLowerCase()));
                 },
-                displayStringForOption: (p) =>
-                    "${p['name']}  (Available: ${p['availableQty']})",
+                onSelected: (selection) {
+                  setState(() => selectedProduct = selection);
+                },
                 fieldViewBuilder:
-                    (context, controller, focusNode, onEditingComplete) {
-                  return TextFormField(
+                    (context, controller, focusNode, onFieldSubmitted) {
+                  controller.text = selectedProduct?['name'] ?? '';
+
+                  return TextField(
                     controller: controller,
                     focusNode: focusNode,
-                    onEditingComplete: onEditingComplete,
-                    decoration: _inputDecoration("Select Product"),
-                    onChanged: (val) {
-                      final found = products.firstWhere(
-                          (p) => p['name'].toLowerCase() == val.toLowerCase(),
-                          orElse: () => {});
-                      setState(() {
-                        selectedProduct = found.isNotEmpty ? found : null;
-                      });
-                    },
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      hintText: "Search Product...",
+                    ),
                   );
-                },
-                onSelected: (p) {
-                  setState(() {
-                    selectedProduct = p;
-                  });
                 },
               ),
               const SizedBox(height: 16),
@@ -421,11 +442,18 @@ class _ReturnScreenState extends State<ReturnScreen> {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: addProduct,
+                  onPressed: _isCheckingBatch ? null : addProduct,
                   style:
                       ElevatedButton.styleFrom(backgroundColor: Colors.black),
-                  child: const Text("Add Product",
-                      style: TextStyle(color: Colors.white)),
+                  child: _isCheckingBatch
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                              color: Colors.white, strokeWidth: 2),
+                        )
+                      : const Text("Add Product",
+                          style: TextStyle(color: Colors.white)),
                 ),
               ),
               const SizedBox(height: 18),

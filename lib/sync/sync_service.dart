@@ -9,54 +9,58 @@ class SyncService {
   final String baseUrl;
   SyncService(this.baseUrl);
 
-  /// Upload a single transaction payload to the server
-  /// Expected to return { 'ok': true, 'remoteId': 123 } on success
+  /// Upload transactions to the server.
+  /// [userId]   — the authenticated user's GUID
+  /// [dataList] — list of transaction payloads (each with clientId, date, etc.)
+  /// Returns { 'ok': true } on success or { 'ok': false, 'error': ..., 'response': ... }
   Future<Map<String, dynamic>> uploadTransactions(
-      List<Map<String, dynamic>> payloadList) async {
+      String userId, List<Map<String, dynamic>> dataList) async {
     if (baseUrl.isEmpty) {
       return {'ok': false, 'error': 'No API URL configured'};
     }
+    if (dataList.isEmpty) {
+      return {'ok': false, 'error': 'No transactions to upload'};
+    }
 
-    final url = Uri.parse("$baseUrl/api/Transaction/createTransaction");
+    final url = Uri.parse('$baseUrl/api/Transaction/createTransaction');
+
+    final body = {
+      'userId': userId,
+      'data': dataList,
+    };
+
+    log('======= API REQUEST =======');
+    log('URL: $url');
+    log('BODY: ${jsonEncode(body)}');
 
     try {
-      for (final payload in payloadList) {
-        print("======= API REQUEST =======");
-        print("URL: $url");
-        log("BODY: ${jsonEncode(payload)}");
+      final response = await http.post(
+        url,
+        headers: {
+          'accept': '*/*',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode(body),
+      );
 
-        final response = await http.post(
-          url,
-          headers: {
-            'accept': '*/*',
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode(payload),
-        );
+      log('======= API RESPONSE =======');
+      log('STATUS: ${response.statusCode}');
+      log('BODY: ${response.body}');
 
-        log("======= API RESPONSE =======");
-        log("STATUS: ${response.statusCode}");
-        log("BODY: ${response.body}");
-
-        if (response.statusCode == 200 || response.statusCode == 201) {
-          final respJson =
-              response.body.isNotEmpty ? jsonDecode(response.body) : {};
-
-          return {'ok': true, 'data': respJson};
-        } else {
-          return {
-            'ok': false,
-            'error': 'HTTP ${response.statusCode}',
-            'response': response.body
-          };
-        }
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final respJson =
+            response.body.isNotEmpty ? jsonDecode(response.body) : {};
+        return {'ok': true, 'data': respJson};
+      } else {
+        return {
+          'ok': false,
+          'error': 'HTTP ${response.statusCode}',
+          'response': response.body,
+        };
       }
-
-      return {'ok': false, 'error': 'No transactions to upload'};
     } catch (e) {
-      print("======= API ERROR =======");
-      print(e);
-
+      log('======= API ERROR =======');
+      log(e.toString());
       return {'ok': false, 'error': e.toString()};
     }
   }

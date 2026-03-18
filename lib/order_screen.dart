@@ -8,15 +8,23 @@ import '../db/database.dart';
 
 class OrderScreen extends StatefulWidget {
   final int? transactionId;
-  const OrderScreen({super.key, this.transactionId});
+  final List<Map<String, dynamic>> customers;
+  final List<Map<String, dynamic>> products;
+  
+  const OrderScreen({
+    super.key, 
+    this.transactionId, 
+    this.customers = const [], 
+    this.products = const [],
+  });
 
   @override
   State<OrderScreen> createState() => _OrderScreenState();
 }
 
 class _OrderScreenState extends State<OrderScreen> {
-  List<Map<String, dynamic>> customers = [];
-  List<Map<String, dynamic>> products = [];
+  late List<Map<String, dynamic>> customers;
+  late List<Map<String, dynamic>> products;
 
   String? selectedCustomer;
   Map<String, dynamic>? selectedCustomerObj;
@@ -34,45 +42,19 @@ class _OrderScreenState extends State<OrderScreen> {
   @override
   void initState() {
     super.initState();
+    customers = widget.customers;
+    products = widget.products;
     _loadInitialData();
   }
 
   Future<void> _loadInitialData() async {
     setState(() => _isLoadingData = true);
 
-    await _fetchCustomersAndProducts();
-
     if (widget.transactionId != null) {
       await _loadExistingTransaction(widget.transactionId!);
     }
 
     setState(() => _isLoadingData = false);
-  }
-
-  /// LOADING DIALOG
-
-  void _showLoadingDialog(String message) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) {
-        return AlertDialog(
-          content: Row(
-            children: [
-              const CircularProgressIndicator(),
-              const SizedBox(width: 20),
-              Expanded(child: Text(message)),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  void _hideLoadingDialog() {
-    if (Navigator.canPop(context)) {
-      Navigator.pop(context);
-    }
   }
 
   /// FETCH DATA FROM API
@@ -122,156 +104,7 @@ class _OrderScreenState extends State<OrderScreen> {
     }
   }
 
-  Future<void> _fetchCustomersAndProducts() async {
-    final prefs = await SharedPreferences.getInstance();
-
-    final baseUrl = prefs.getString('baseUrl') ?? '';
-    final userId = prefs.getString('userId') ?? '';
-    final townIds =
-        prefs.getStringList('townIds')?.map(int.parse).toList() ?? [];
-
-    // ------------------- CUSTOMERS -------------------
-    bool customersLoaded = false;
-    if (baseUrl.isNotEmpty && userId.isNotEmpty && townIds.isNotEmpty) {
-      try {
-        _showLoadingDialog("Fetching customers...");
-        final response = await http
-            .post(
-              Uri.parse('$baseUrl/api/Customer/customerFetch'),
-              headers: {"Content-Type": "application/json"},
-              body: jsonEncode({"userId": userId, "townIds": townIds}),
-            )
-            .timeout(const Duration(seconds: 15));
-
-        if (Navigator.canPop(context)) Navigator.pop(context);
-
-        debugPrint("Customer API status: ${response.statusCode}");
-        debugPrint("Customer API body: ${response.body}");
-
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body) as Map<String, dynamic>?;
-
-          if (data != null && data['status'] == 'success') {
-            final List customersList = data['customers'] as List? ?? [];
-
-            for (var c in customersList) {
-              await AppDatabase.upsertCustomer({
-                'CustomerID': c['customerId'] ?? 0,
-                'Name': c['customerName']?.toString() ?? '',
-                'Town': c['townID']?.toString() ?? '',
-                'IsNarcotics':
-                    (c['isNarcoticsAllowed'] as bool? ?? true) ? 1 : 0,
-              });
-            }
-
-            customersLoaded = true;
-          }
-        }
-      } catch (e) {
-        if (Navigator.canPop(context)) Navigator.pop(context);
-        debugPrint("Customer fetch error: $e");
-      }
-    } else {
-      debugPrint(
-          "Skipping API customer fetch: missing baseUrl, userId, or townIds");
-    }
-
-    // Always load customers from local DB
-    await _loadCustomersFromDB();
-    if (!customersLoaded) {
-      debugPrint("Customers loaded from local DB: ${customers.length}");
-    }
-
-    // ------------------- PRODUCTS -------------------
-    bool productsLoaded = false;
-    if (baseUrl.isNotEmpty && userId.isNotEmpty) {
-      try {
-        _showLoadingDialog("Fetching products...");
-        final response = await http
-            .post(
-              Uri.parse('$baseUrl/api/Products/getProduct'),
-              headers: {"Content-Type": "application/json"},
-              body: jsonEncode({"userId": userId}),
-            )
-            .timeout(const Duration(seconds: 15));
-
-        if (Navigator.canPop(context)) Navigator.pop(context);
-
-        debugPrint("Product API status: ${response.statusCode}");
-        debugPrint("Product API body: ${response.body}");
-
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body) as Map<String, dynamic>?;
-
-          if (data != null && data['status'] == 'success') {
-            final List productList = data['products'] as List? ?? [];
-
-            for (var p in productList) {
-              await AppDatabase.upsertProduct({
-                'ProductID': p['productId'] ?? 0,
-                'Name': p['productName']?.toString() ?? '',
-                'Code': (p['productId'] ?? 0).toString(),
-                'ProductType': p['productType']?.toString() ?? 'Medicine',
-                'UnitPrice': ((p['latestPrice'] ?? 0) as num).toDouble(),
-                'AvailableQty': p['totalQty'] ?? 0,
-              });
-            }
-
-            productsLoaded = true;
-          }
-        }
-      } catch (e) {
-        if (Navigator.canPop(context)) Navigator.pop(context);
-        debugPrint("Product fetch error: $e");
-      }
-    } else {
-      debugPrint("Skipping API product fetch: missing baseUrl or userId");
-    }
-
-    // Always load products from local DB
-    await _loadProductsFromDB();
-    if (!productsLoaded) {
-      debugPrint("Products loaded from local DB: ${products.length}");
-    }
-  }
-
-  /// LOAD FROM LOCAL DB
-  /// --------------------- FETCH PRODUCTS & CUSTOMERS ---------------------
-
-  Future<void> _loadCustomersFromDB() async {
-    final db = await AppDatabase.init();
-    final rows = await db.query('Customer');
-
-    customers = rows.map((r) {
-      return {
-        "id": r['CustomerID'] as int,
-        "name": r['Name'] as String,
-        "isNarcoticsAllowed": (r['IsNarcotics'] as int? ?? 0) == 1,
-        "townId": r['Town']?.toString() ?? ''
-      };
-    }).toList();
-
-    setState(() {});
-  }
-
-  Future<void> _loadProductsFromDB() async {
-    final db = await AppDatabase.init();
-    final rows = await db.query('Product');
-
-    products = rows.map((r) {
-      return {
-        'id': r['ProductID'] as int,
-        'name': r['Name'] as String,
-        'price': ((r['UnitPrice'] as num?)?.toInt() ?? 0),
-        'availableQty': (r['AvailableQty'] as int?) ?? 0,
-        'type': r['ProductType']?.toString() ?? 'Medicine',
-      };
-    }).toList();
-
-    setState(() {});
-  }
-
-  /// --------------------- ADD PRODUCT ---------------------
+  /// LOAD EXISTING ORDER
 
   void addProduct() {
     if (selectedCustomerObj == null) {
@@ -385,14 +218,43 @@ class _OrderScreenState extends State<OrderScreen> {
       });
     }
 
-    final txnId = await AppDatabase.createTransactionWithDetails(
-      customerId: custId,
-      type: type,
-      details: details,
-    );
+    if (widget.transactionId != null) {
+      // Editing an existing transaction opened from the overview
+      await AppDatabase.updateTransactionAndReplaceDetails(
+        transactionId: widget.transactionId!,
+        customerId: custId,
+        type: type,
+        details: details,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("$type updated (local)")));
+    } else {
+      // New save — reuse today's pending/failed card if one exists
+      final existingId = await AppDatabase.findTransactionForCustomerOnDate(
+          custId, type, DateTime.now());
 
-    ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Order saved (local) id: $txnId")));
+      if (existingId != null) {
+        await AppDatabase.updateTransactionAndReplaceDetails(
+          transactionId: existingId,
+          customerId: custId,
+          type: type,
+          details: details,
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("$type updated (local)")));
+      } else {
+        final txnId = await AppDatabase.createTransactionWithDetails(
+          customerId: custId,
+          type: type,
+          details: details,
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("$type saved (local) id: $txnId")));
+      }
+    }
 
     setState(() {
       selectedCustomer = null;

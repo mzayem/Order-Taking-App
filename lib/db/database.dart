@@ -449,8 +449,9 @@ class AppDatabase {
     final dayStr =
         '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
     final rows = await db.query('"Transaction"',
-        where: 'CustomerID = ? AND Type = ? AND date(Date) = ?',
-        whereArgs: [customerId, type, dayStr],
+        where:
+            'CustomerID = ? AND Type = ? AND date(Date) = ? AND SyncStatus != ?',
+        whereArgs: [customerId, type, dayStr, 'Synced'],
         limit: 1);
     if (rows.isNotEmpty) return rows.first['TransactionID'] as int;
     return null;

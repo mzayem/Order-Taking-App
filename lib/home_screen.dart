@@ -27,15 +27,68 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
 
-  final List<Widget> _screens = const [
-    OverviewScreen(),
-    OrderScreen(),
-    CashScreen(),
-    ReturnScreen(),
-    ProfileScreen(),
+  final List<Widget> _screens = [
+    const OverviewScreen(),
+    const OrderScreen(), // Initially empty, we'll update it dynamically
+    const CashScreen(),
+    const ReturnScreen(),
+    const ProfileScreen(),
   ];
 
-  void _onItemTapped(int index) => setState(() => _selectedIndex = index);
+  List<Map<String, dynamic>> _customers = [];
+  List<Map<String, dynamic>> _products = [];
+  bool _isLoadingData = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLocalData();
+  }
+
+  Future<void> _loadLocalData() async {
+    setState(() => _isLoadingData = true);
+    final db = await AppDatabase.init();
+
+    // Load Customers
+    final custRows = await db.query('Customer');
+    _customers = custRows.map((r) {
+      return {
+        "id": r['CustomerID'] as int,
+        "name": r['Name'] as String,
+        "isNarcoticsAllowed": (r['IsNarcotics'] as int? ?? 0) == 1,
+        "townId": r['Town']?.toString() ?? ''
+      };
+    }).toList();
+
+    // Load Products
+    final prodRows = await db.query('Product');
+    _products = prodRows.map((r) {
+      return {
+        'id': r['ProductID'] as int,
+        'name': r['Name'] as String,
+        'price': ((r['UnitPrice'] as num?)?.toInt() ?? 0),
+        'availableQty': (r['AvailableQty'] as int?) ?? 0,
+        'type': r['ProductType']?.toString() ?? 'Medicine',
+      };
+    }).toList();
+
+    if (mounted) {
+      setState(() => _isLoadingData = false);
+    }
+  }
+
+  void _onItemTapped(int index) {
+    if (index == 1) {
+      // Order tab
+      // refresh order screen data when tapped
+      _screens[1] = OrderScreen(customers: _customers, products: _products);
+    }
+    setState(() => _selectedIndex = index);
+  }
+
+  void refreshData() {
+    _loadLocalData();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -77,6 +130,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
   bool _selectionMode = false;
   bool _isUploading = false;
   double _uploadProgress = 0.0;
+  DateTime _selectedDate = DateTime.now();
 
   final Set<int> _selectedTxIds = {};
   List<Map<String, dynamic>> _transactions = [];
@@ -84,8 +138,255 @@ class _OverviewScreenState extends State<OverviewScreen> {
   @override
   void initState() {
     super.initState();
+    _selectedDate = DateTime.now();
     _loadTransactions();
-    // testPushTransaction();
+    _fetchCustomersAndProducts();
+  }
+
+  // Status Tracking: 0 = Loading, 1 = Success, -1 = Error, null = Not Started
+  void _showSyncDialog(
+    BuildContext context,
+    ValueNotifier<int?> customerStatus,
+    ValueNotifier<int?> productStatus,
+    ValueNotifier<String?> errorMessage,
+  ) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return PopScope(
+          canPop: false,
+          child: AlertDialog(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            backgroundColor: Colors.white,
+            title: const Text(
+              "Syncing Data",
+              style:
+                  TextStyle(fontWeight: FontWeight.bold, color: Colors.black),
+            ),
+            content: ValueListenableBuilder<String?>(
+                valueListenable: errorMessage,
+                builder: (context, errorTxt, child) {
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Customers Row
+                      ValueListenableBuilder<int?>(
+                        valueListenable: customerStatus,
+                        builder: (context, status, child) {
+                          return _buildSyncRow("Fetch Customers", status);
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      // Products Row
+                      ValueListenableBuilder<int?>(
+                        valueListenable: productStatus,
+                        builder: (context, status, child) {
+                          return _buildSyncRow("Fetch Products", status);
+                        },
+                      ),
+                      if (errorTxt != null) ...[
+                        const SizedBox(height: 20),
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                              color: Colors.red.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.red.shade200)),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(Icons.error_outline,
+                                  color: Colors.red, size: 20),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  errorTxt,
+                                  style: const TextStyle(
+                                      color: Colors.red, fontSize: 13),
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      ]
+                    ],
+                  );
+                }),
+            actions: [
+              ValueListenableBuilder<int?>(
+                  valueListenable: customerStatus,
+                  builder: (context, custStatus, _) {
+                    return ValueListenableBuilder<int?>(
+                        valueListenable: productStatus,
+                        builder: (context, prodStatus, _) {
+                          final isDone = (custStatus != 0 && prodStatus != 0) &&
+                              (custStatus != null && prodStatus != null);
+                          if (!isDone) return const SizedBox.shrink();
+
+                          return TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text("Close",
+                                style: TextStyle(
+                                    color: Colors.teal,
+                                    fontWeight: FontWeight.bold)),
+                          );
+                        });
+                  })
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSyncRow(String title, int? status) {
+    Widget icon;
+    if (status == null || status == 0) {
+      icon = const SizedBox(
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.teal));
+    } else if (status == 1) {
+      icon = const Icon(Icons.check_circle, color: Colors.green, size: 24);
+    } else {
+      icon = const Icon(Icons.cancel, color: Colors.red, size: 24);
+    }
+
+    return Row(
+      children: [
+        icon,
+        const SizedBox(width: 16),
+        Text(title,
+            style: const TextStyle(fontSize: 16, color: Colors.black87)),
+      ],
+    );
+  }
+
+  Future<void> _fetchCustomersAndProducts() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    final baseUrl = prefs.getString('baseUrl') ?? '';
+    final userId = prefs.getString('userId') ?? '';
+    final townIds =
+        prefs.getStringList('townIds')?.map(int.parse).toList() ?? [];
+
+    if (baseUrl.isEmpty || userId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Missing Configuration Setup")));
+      return;
+    }
+
+    // Initialize tracking variables
+    final customerStatus = ValueNotifier<int?>(0); // 0 = loading
+    final productStatus = ValueNotifier<int?>(0);
+    final errorMessage = ValueNotifier<String?>(null);
+
+    if (mounted) {
+      _showSyncDialog(context, customerStatus, productStatus, errorMessage);
+    }
+
+    // ------------------- CUSTOMERS -------------------
+    if (townIds.isNotEmpty) {
+      try {
+        final response = await http
+            .post(
+              Uri.parse('$baseUrl/api/Customer/customerFetch'),
+              headers: {"Content-Type": "application/json"},
+              body: jsonEncode({"userId": userId, "townIds": townIds}),
+            )
+            .timeout(const Duration(seconds: 15));
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body) as Map<String, dynamic>?;
+
+          if (data != null && data['status'] == 'success') {
+            final List customersList = data['customers'] as List? ?? [];
+            for (var c in customersList) {
+              await AppDatabase.upsertCustomer({
+                'CustomerID': c['customerId'] ?? 0,
+                'Name': c['customerName']?.toString() ?? '',
+                'Town': c['townID']?.toString() ?? '',
+                'IsNarcotics':
+                    (c['isNarcoticsAllowed'] as bool? ?? true) ? 1 : 0,
+              });
+            }
+            customerStatus.value = 1; // Success
+          } else {
+            customerStatus.value = -1; // Failed
+            errorMessage.value = "Failed to parse Customer JSON";
+          }
+        } else {
+          customerStatus.value = -1;
+          errorMessage.value = "Customer API Error: ${response.statusCode}";
+        }
+      } catch (e) {
+        customerStatus.value = -1;
+        errorMessage.value = "Customer Network Error";
+        debugPrint("Customer fetch error: $e");
+      }
+    } else {
+      customerStatus.value = -1;
+      errorMessage.value = "No Towns configured for this user";
+    }
+
+    // ------------------- PRODUCTS -------------------
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/api/Products/getProduct'),
+            headers: {"Content-Type": "application/json"},
+            body: jsonEncode({"userId": userId}),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>?;
+
+        if (data != null && data['status'] == 'success') {
+          final List productList = data['products'] as List? ?? [];
+          for (var p in productList) {
+            await AppDatabase.upsertProduct({
+              'ProductID': p['productId'] ?? 0,
+              'Name': p['productName']?.toString() ?? '',
+              'Code': (p['productId'] ?? 0).toString(),
+              'ProductType': p['productType']?.toString() ?? 'Medicine',
+              'UnitPrice': ((p['latestPrice'] ?? 0) as num).toDouble(),
+              'AvailableQty': p['totalQty'] ?? 0,
+            });
+          }
+          productStatus.value = 1; // Success
+        } else {
+          productStatus.value = -1;
+          if (errorMessage.value == null) {
+            errorMessage.value = "Failed to parse Product JSON";
+          }
+        }
+      } else {
+        productStatus.value = -1;
+        if (errorMessage.value == null) {
+          errorMessage.value = "Product API Error: ${response.statusCode}";
+        }
+      }
+    } catch (e) {
+      productStatus.value = -1;
+      if (errorMessage.value == null) {
+        errorMessage.value = "Product Network Error";
+      }
+      debugPrint("Product fetch error: $e");
+    }
+
+    // Auto-close dialog after 1.5 seconds if both are successful
+    // if (customerStatus.value == 1 && productStatus.value == 1) {
+    //   await Future.delayed(const Duration(milliseconds: 1500));
+    //   if (mounted && Navigator.canPop(context)) {
+    //     Navigator.pop(context);
+    //   }
+    // }
+
+    // Refresh local lists
+    // _loadLocalData();
   }
 
   Future<void> testPushTransaction() async {
@@ -203,15 +504,10 @@ class _OverviewScreenState extends State<OverviewScreen> {
       _isUploading = true;
       _uploadProgress = 0.0;
     });
+
     final prefs = await SharedPreferences.getInstance();
-    final userId = prefs.getString("userId") ?? "";
-    log("USER ID BEFORE UPLOAD: $userId");
-    assert(userId.isNotEmpty, "userId is empty — user is not logged in!");
-
-    print("USER ID BEFORE API CALL: $userId");
+    final userId = (prefs.getString('userId') ?? '').trim();
     final baseUrl = prefs.getString('baseUrl') ?? '';
-
-    final sync = SyncService(baseUrl);
 
     if (baseUrl.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -231,7 +527,8 @@ class _OverviewScreenState extends State<OverviewScreen> {
 
     final ids = _selectedTxIds.toList();
 
-    final List<Map<String, dynamic>> transactionsToUpload = [];
+    // Build the `data` array — one entry per selected transaction
+    final List<Map<String, dynamic>> dataList = [];
 
     for (final id in ids) {
       final rows = await AppDatabase.getTransactionWithDetails(id);
@@ -240,66 +537,63 @@ class _OverviewScreenState extends State<OverviewScreen> {
       final header = rows.first;
 
       final List<Map<String, dynamic>> details = [];
-
       for (final r in rows) {
         if (r['TransactionDetailID'] != null) {
+          final unitPrice = (r['UnitPrice'] as num?)?.toDouble() ?? 0.0;
+          final qty = (r['Qty'] as num?)?.toInt() ?? 0;
           details.add({
-            "productId": r['ProductID'],
-            "batchNo": r['BatchNo'] ?? "",
-            "qty": r['Qty'],
-            "unitPrice": r['UnitPrice'],
-            "totalAmount": r['TotalPrice'],
+            'productId': r['ProductID'],
+            'batchNo': r['BatchNo'] ?? '',
+            'qty': qty,
+            'unitPrice': unitPrice,
+            'totalAmount':
+                (r['TotalPrice'] as num?)?.toDouble() ?? unitPrice * qty,
           });
         }
       }
 
-      /// Convert type to API number
       int typeValue = 0;
-
-      if (header['Type'] == "Cash") {
+      if (header['Type'] == 'Cash') {
         typeValue = 1;
-      } else if (header['Type'] == "Return") {
+      } else if (header['Type'] == 'Return') {
         typeValue = 2;
-      } else {
-        typeValue = 0;
       }
 
-      transactionsToUpload.add({
-        "userId": userId,
-        "date": DateTime.now().toUtc().toIso8601String(),
-        "customerId": header['CustomerID'],
-        "type": typeValue,
-        "remarks": header['Remarks'] ?? "",
-        "totalAmount": header['TotalAmount'] ?? 0,
-        "transactionDetails": details
+      dataList.add({
+        'clientId': id, // local TransactionID for tracking
+        'date': header['Date'] ?? DateTime.now().toUtc().toIso8601String(),
+        'customerId': header['CustomerID'],
+        'type': typeValue,
+        'remarks': header['Remarks'] ?? '',
+        'totalAmount': (header['TotalAmount'] as num?)?.toDouble() ?? 0.0,
+        'transactionDetails': details,
       });
     }
 
-    final res = await sync.uploadTransactions(transactionsToUpload);
+    if (dataList.isEmpty) {
+      setState(() => _isUploading = false);
+      return;
+    }
+
+    final sync = SyncService(baseUrl);
+    final res = await sync.uploadTransactions(userId, dataList);
 
     if (res['ok'] == true) {
       for (final id in ids) {
         await AppDatabase.markTransactionSynced(id);
       }
-
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Upload success: ${ids.length} transactions"),
-        ),
+        SnackBar(content: Text('Upload success: ${ids.length} transactions')),
       );
     } else {
       for (final id in ids) {
         await AppDatabase.markTransactionFailed(id);
       }
-
-      print("Upload failed: ${res['error']}");
-      print("API response: ${res['response']}");
-
+      debugPrint('Upload failed: ${res['error']}');
+      debugPrint('API response: ${res['response']}');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            "Upload fail: ${res['error']}\n${res['response'] ?? ''}",
-          ),
+          content: Text('Upload fail: ${res['error']}\n${res['response'] ?? ''}'),
           duration: const Duration(seconds: 4),
         ),
       );
@@ -347,14 +641,15 @@ class _OverviewScreenState extends State<OverviewScreen> {
 
   String _formatDayDate(DateTime dt) {
     const weekdays = [
-      "Sunday",
       "Monday",
       "Tuesday",
       "Wednesday",
       "Thursday",
       "Friday",
-      "Saturday"
+      "Saturday",
+      "Sunday"
     ];
+
     const months = [
       "Jan",
       "Feb",
@@ -369,8 +664,10 @@ class _OverviewScreenState extends State<OverviewScreen> {
       "Nov",
       "Dec"
     ];
-    final dayName = weekdays[dt.weekday % 7];
+
+    final dayName = weekdays[dt.weekday - 1];
     final monthName = months[dt.month - 1];
+
     return "$dayName, ${dt.day} $monthName";
   }
 
@@ -800,8 +1097,19 @@ class _OverviewScreenState extends State<OverviewScreen> {
                             await Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (_) =>
-                                    OrderScreen(transactionId: transactionId),
+                                builder: (_) => OrderScreen(
+                                  transactionId: transactionId,
+                                  customers: context
+                                          .findAncestorStateOfType<
+                                              _HomeScreenState>()
+                                          ?._customers ??
+                                      [],
+                                  products: context
+                                          .findAncestorStateOfType<
+                                              _HomeScreenState>()
+                                          ?._products ??
+                                      [],
+                                ),
                               ),
                             );
                           } else if (type == 'Cash') {
@@ -851,27 +1159,30 @@ class _OverviewScreenState extends State<OverviewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final headerDate = _transactions.isNotEmpty
-        ? _transactions.first['date'] as DateTime
-        : DateTime.now();
+    final filteredByDate = _transactions.where((t) {
+      final tDate = t['date'] as DateTime;
+      return tDate.year == _selectedDate.year &&
+          tDate.month == _selectedDate.month &&
+          tDate.day == _selectedDate.day;
+    }).toList();
 
     final filtered = selectedFilter == 'All'
-        ? _transactions
-        : _transactions
+        ? filteredByDate
+        : filteredByDate
             .where((t) => (t['type'] ?? '') == selectedFilter)
             .toList();
 
     final showUploadFab =
         _selectionMode && _selectedTxIds.isNotEmpty && !_isUploading;
 
-    final orderTotal = _transactions.fold<double>(
+    final orderTotal = filteredByDate.fold<double>(
       0.0,
       (sum, t) =>
           sum +
           (t['type'] == 'Order' ? ((t['total'] ?? 0) as num).toDouble() : 0.0),
     );
 
-    final cashTotal = _transactions.fold<double>(
+    final cashTotal = filteredByDate.fold<double>(
       0.0,
       (sum, t) =>
           sum +
@@ -883,11 +1194,77 @@ class _OverviewScreenState extends State<OverviewScreen> {
         title: Text(
           _selectionMode
               ? "${_selectedTxIds.length} Selected"
-              : _formatDayDate(headerDate),
+              : _formatDayDate(_selectedDate),
         ),
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         actions: [
+          if (!_selectionMode)
+            IconButton(
+              icon: const Icon(Icons.chevron_left),
+              tooltip: "Previous Day",
+              onPressed: () {
+                setState(() {
+                  _selectedDate =
+                      _selectedDate.subtract(const Duration(days: 1));
+                });
+              },
+            ),
+          if (!_selectionMode)
+            IconButton(
+              icon: const Icon(Icons.calendar_month),
+              tooltip: "Select Date",
+              onPressed: () async {
+                final DateTime? picked = await showDatePicker(
+                  context: context,
+                  initialDate: _selectedDate,
+                  firstDate: DateTime(2000),
+                  lastDate: DateTime(2101),
+                );
+                if (picked != null && picked != _selectedDate) {
+                  setState(() {
+                    _selectedDate = picked;
+                  });
+                }
+              },
+            ),
+          if (!_selectionMode)
+            IconButton(
+              icon: const Icon(Icons.chevron_right),
+              tooltip: "Next Day",
+              onPressed: () {
+                setState(() {
+                  _selectedDate = _selectedDate.add(const Duration(days: 1));
+                });
+              },
+            ),
+          if (!_selectionMode)
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              tooltip: "Refresh Data",
+              onPressed: () {
+                _fetchCustomersAndProducts();
+              },
+            ),
+
+          /// Select All Button (only when selecting)
+          if (_selectionMode)
+            TextButton(
+              onPressed: () {
+                setState(() {
+                  _selectedTxIds
+                      .addAll(filtered.map((t) => t['transactionId'] as int));
+                });
+              },
+              child: const Text(
+                "Select All",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+
           /// Sync Button (only when not selecting)
           if (!_selectionMode)
             IconButton(
@@ -977,7 +1354,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
                           style: TextStyle(
                               fontSize: 34, fontWeight: FontWeight.w600)),
                       const SizedBox(height: 6),
-                      Text(_formatDayDate(headerDate),
+                      Text(_formatDayDate(_selectedDate),
                           style: const TextStyle(
                               fontSize: 16, color: Colors.grey)),
                       const SizedBox(height: 12),

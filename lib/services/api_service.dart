@@ -122,70 +122,82 @@ class ApiService {
     }
   }
 
-  /// -----------------------------
+  /// ------------------------------------------------------------------
+  /// BUILD A SINGLE TRANSACTION PAYLOAD (shared helper)
+  /// ------------------------------------------------------------------
+  static Future<Map<String, dynamic>?> _buildTransactionPayload(
+      int transactionId) async {
+    final rows = await AppDatabase.getTransactionWithDetails(transactionId);
+    if (rows.isEmpty) return null;
+
+    final header = rows.first;
+
+    final details = <Map<String, dynamic>>[];
+    for (var r in rows) {
+      if (r['TransactionDetailID'] != null) {
+        final unitPrice = (r['UnitPrice'] as num?)?.toDouble() ?? 0.0;
+        final qty = (r['Qty'] as num?)?.toInt() ?? 0;
+        details.add({
+          'productId': r['ProductID'],
+          'batchNo': r['BatchNo'] ?? '',
+          'qty': qty,
+          'unitPrice': unitPrice,
+          'totalAmount':
+              (r['TotalPrice'] as num?)?.toDouble() ?? unitPrice * qty,
+        });
+      }
+    }
+
+    return {
+      'clientId': transactionId, // local ID used for tracking
+      'date': DateTime.now().toUtc().toIso8601String(),
+      'customerId': header['CustomerID'] as int,
+      'type': convertType(header['Type'] as String),
+      'remarks': header['Remarks'] ?? '',
+      'totalAmount': (header['TotalAmount'] as num?)?.toDouble() ?? 0.0,
+      'transactionDetails': details,
+    };
+  }
+
+  /// ------------------------------------------------------------------
   /// UPLOAD SINGLE TRANSACTION
-  /// -----------------------------
+  /// Wraps the transaction in the `data` array as required by the API.
+  /// ------------------------------------------------------------------
   static Future<bool> uploadTransaction(int transactionId) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-
       final baseUrl = prefs.getString('baseUrl') ?? '';
-      final userId = (prefs.getString("userId") ?? "").trim();
+      final userId = (prefs.getString('userId') ?? '').trim();
 
-      print("USER ID: $userId");
-      print("USER ID LENGTH: ${userId.length}");
+      debugPrint('uploadTransaction – userId: $userId');
 
       if (userId.isEmpty || baseUrl.isEmpty) {
-        print("User ID or Base URL missing");
+        debugPrint('uploadTransaction: userId or baseUrl missing');
         return false;
       }
 
-      final rows = await AppDatabase.getTransactionWithDetails(transactionId);
-
-      if (rows.isEmpty) return false;
-
-      final header = rows.first;
-
-      List<Map<String, dynamic>> details = [];
-
-      for (var r in rows) {
-        if (r['TransactionDetailID'] != null) {
-          details.add({
-            "productId": r['ProductID'],
-            "batchNo": r['BatchNo'] ?? "",
-            "qty": r['Qty'],
-            "unitPrice": (r['UnitPrice'] as num?)?.toDouble() ?? 0,
-            "totalAmount": (r['TotalPrice'] as num?)?.toDouble() ?? 0,
-          });
-        }
+      final payload = await _buildTransactionPayload(transactionId);
+      if (payload == null) {
+        debugPrint('uploadTransaction: no rows found for id $transactionId');
+        return false;
       }
+
       final body = {
-        "userId": userId,
-        "date": DateTime.now().toUtc().toIso8601String(),
-        "customerId": header['CustomerID'] as int,
-        "type": convertType(header['Type'] as String),
-        "remarks": header['Remarks'] ?? "",
-        "totalAmount": (header['TotalAmount'] as num?)?.toDouble() ?? 0.0,
-        "transactionDetails": details
+        'userId': userId,
+        'Data': [payload],
       };
 
-      print("UPLOAD BODY: ${jsonEncode(body)}");
-
-      print("USER ID: $userId");
-      print("TOKEN: ${prefs.getString("headerRef")}");
-      print("DETAIL COUNT: ${details.length}");
+      debugPrint('uploadTransaction BODY: ${jsonEncode(body)}');
 
       final url = Uri.parse('$baseUrl/api/Transaction/createTransaction');
       final response = await http.post(
         url,
-        headers: {
-          "accept": "*/*",
-          "Content-Type": "application/json",
-        },
+        headers: {'accept': '*/*', 'Content-Type': 'application/json'},
         body: jsonEncode(body),
       );
-      print("STATUS: ${response.statusCode}");
-      print("RESPONSE: ${response.body}");
+
+      debugPrint('uploadTransaction STATUS: ${response.statusCode}');
+      debugPrint('uploadTransaction RESPONSE: ${response.body}');
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         await AppDatabase.markTransactionSynced(transactionId);
@@ -195,8 +207,7 @@ class ApiService {
         return false;
       }
     } catch (e) {
-      print("UPLOAD ERROR: $e");
-
+      debugPrint('uploadTransaction ERROR: $e');
       await AppDatabase.markTransactionFailed(transactionId);
       return false;
     }
@@ -230,6 +241,75 @@ class ApiService {
         "availableQty": r['AvailableQty']
       };
     }).toList();
+  }
+
+  /// -----------------------------
+  /// CHECK PRODUCT BATCH
+  /// -----------------------------
+  /// Returns a map: {'valid': bool, 'message': String?}
+  static Future<Map<String, dynamic>> checkBatch({
+    required int productId,
+    required String batchNo,
+    required int customerId,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final baseUrl = prefs.getString('baseUrl') ?? '';
+      final userId = prefs.getString('userId') ?? '';
+
+      if (baseUrl.isEmpty || userId.isEmpty) {
+        debugPrint('checkBatch: baseUrl or userId missing');
+        return {
+          'valid': false,
+          'message': 'Base URL or User ID not configured'
+        };
+      }
+
+      final url = Uri.parse('$baseUrl/api/Products/batchCheck');
+      final body = {
+        'userId': userId,
+        'productId': productId,
+        'batchno': batchNo,
+        'customerId': customerId,
+      };
+
+      debugPrint('checkBatch REQUEST: ${jsonEncode(body)}');
+
+      final response = await http.post(
+        url,
+        headers: {'accept': '*/*', 'Content-Type': 'application/json'},
+        body: jsonEncode(body),
+      );
+
+      debugPrint('checkBatch STATUS: ${response.statusCode}');
+      debugPrint('checkBatch RESPONSE: ${response.body}');
+
+      if (response.statusCode == 200) {
+        return {'valid': true, 'message': null};
+      }
+
+      // Try to extract an error message from the response body
+      String errorMsg = 'Invalid batch number';
+      try {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map) {
+          errorMsg = (decoded['message'] ??
+                  decoded['error'] ??
+                  decoded['title'] ??
+                  errorMsg)
+              .toString();
+        } else if (decoded is String && decoded.isNotEmpty) {
+          errorMsg = decoded;
+        }
+      } catch (_) {
+        if (response.body.isNotEmpty) errorMsg = response.body;
+      }
+
+      return {'valid': false, 'message': errorMsg};
+    } catch (e) {
+      debugPrint('checkBatch ERROR: $e');
+      return {'valid': false, 'message': 'Network error: $e'};
+    }
   }
 
   static Future<int> syncAllTransactions() async {
