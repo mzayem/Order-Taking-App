@@ -306,9 +306,9 @@ class _ReturnScreenState extends State<ReturnScreen> {
         fillColor: const Color(0xFFF6F6F6),
         contentPadding:
             const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
-        border: OutlineInputBorder(
+        border: const OutlineInputBorder(
             // borderRadius: BorderRadius.circular(12),
-            borderSide: const BorderSide(color: Color(0xFFEBEBEB))),
+            borderSide: BorderSide(color: Color(0xFFEBEBEB))),
         enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
             borderSide: const BorderSide(color: Color(0xFFEBEBEB))),
@@ -528,23 +528,9 @@ class _ReturnScreenState extends State<ReturnScreen> {
                     const SizedBox(width: 12),
                     Expanded(
                       child: ElevatedButton(
-                        onPressed: () => saveAs("Draft"),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blue[300],
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10)),
-                        ),
-                        child: const Text("Draft"),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: ElevatedButton(
                         onPressed: () => saveAs("Return"),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.black,
+                          backgroundColor: Colors.green,
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 14),
                           shape: RoundedRectangleBorder(
