@@ -506,6 +506,16 @@ class AppDatabase {
         whereArgs: [transactionId]);
   }
 
+  static Future<void> deleteTransaction(int transactionId) async {
+    final db = await init();
+    await db.transaction((txn) async {
+      await txn.delete('TransactionDetail',
+          where: 'TransactionID = ?', whereArgs: [transactionId]);
+      await txn.delete('"Transaction"',
+          where: 'TransactionID = ?', whereArgs: [transactionId]);
+    });
+  }
+
   // ================= DATABASE FILE & CLOSE =================
   static Future<void> deleteDatabaseFile() async {
     final dbPath = await getDatabasesPath();

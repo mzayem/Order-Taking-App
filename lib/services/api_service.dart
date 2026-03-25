@@ -52,7 +52,7 @@ class ApiService {
 
         final List list = data['customers'] ?? [];
 
-        List<String> customers = [];
+        Set<String> customers = {};
 
         // is isNarcoticsAllowed should be added to the API response and handled in order creation
         for (var c in list) {
@@ -67,7 +67,7 @@ class ApiService {
           });
         }
 
-        return customers;
+        return customers.toList();
       }
 
       return await _customersFromDB();
@@ -89,7 +89,7 @@ class ApiService {
         return await _productsFromDB();
       }
 
-      final url = Uri.parse('$baseUrl/api/Product/productFetch');
+      final url = Uri.parse('$baseUrl/api/Products/getProduct');
 
       final response = await http.post(
         url,
@@ -104,16 +104,16 @@ class ApiService {
 
         final List list = data['products'] ?? [];
 
-        List<Map<String, dynamic>> products = [];
+        Map<String, Map<String, dynamic>> products = {};
 
         // Product Type from API should be added like Narcotics || Medicine
         for (var p in list) {
-          products.add({
+          products[p['productName']] = {
             "name": p['productName'],
             "price": (p['latestPrice'] as num).toDouble(),
             "type": p['productType'],
             "availableQty": p['totalQty']
-          });
+          };
 
           await AppDatabase.upsertProduct({
             'ProductID': p['productId'],
@@ -125,7 +125,7 @@ class ApiService {
           });
         }
 
-        return products;
+        return products.values.toList();
       }
 
       return await _productsFromDB();
@@ -291,7 +291,7 @@ class ApiService {
 
     final rows = await db.query('Customer');
 
-    return rows.map((r) => r['Name'] as String).toList();
+    return rows.map((r) => r['Name'] as String).toSet().toList();
   }
 
   /// -----------------------------
@@ -301,14 +301,22 @@ class ApiService {
     final db = await AppDatabase.init();
 
     final rows = await db.query('Product');
+    final Map<String, Map<String, dynamic>> unique = {};
 
-    return rows.map((r) {
-      return {
-        "name": r['Name'],
-        "price": (r['UnitPrice'] as num).toDouble(),
-        "availableQty": r['AvailableQty']
-      };
-    }).toList();
+    for (var r in rows) {
+      final name = r['Name'] as String;
+      final id = r['ProductID'] as int;
+      if (!unique.containsKey(name) || (unique[name]!['id'] ?? 0) < id) {
+        unique[name] = {
+          "id": id,
+          "name": name,
+          "price": (r['UnitPrice'] as num).toDouble(),
+          "availableQty": r['AvailableQty']
+        };
+      }
+    }
+
+    return unique.values.toList();
   }
 
   /// -----------------------------
@@ -414,7 +422,10 @@ class ApiService {
       }
 
       if (dataList.isEmpty) {
-        return {'ok': false, 'error': 'Could not build payload for pending transactions'};
+        return {
+          'ok': false,
+          'error': 'Could not build payload for pending transactions'
+        };
       }
 
       final result = await uploadTransactions(
@@ -430,9 +441,9 @@ class ApiService {
         final Map<String, dynamic> data = result['data'] ?? {};
         String msg = 'Successfully synced ${txIds.length} transactions';
         if (data.containsKey('message')) {
-           msg = data['message'].toString();
+          msg = data['message'].toString();
         } else if (data.containsKey('response')) {
-           msg = data['response'].toString();
+          msg = data['response'].toString();
         }
         return {'ok': true, 'message': msg};
       } else {

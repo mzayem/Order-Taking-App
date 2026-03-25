@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import '../db/database.dart';
 import 'services/api_service.dart';
+import 'home_screen.dart';
 
 class ReturnScreen extends StatefulWidget {
   final int? transactionId;
@@ -21,12 +22,18 @@ class _ReturnScreenState extends State<ReturnScreen> {
   final TextEditingController batchController = TextEditingController();
   final TextEditingController remarksController = TextEditingController();
 
+  final FocusNode _qtyFocusNode = FocusNode();
+  final FocusNode _batchFocusNode = FocusNode();
+  final FocusNode _remarksFocusNode = FocusNode();
+
   List<Map<String, dynamic>> selectedProducts = [];
 
   bool _isLoading = false;
   bool _isSaving = false;
   bool _isLoadingData = true;
   bool _isCheckingBatch = false;
+
+  FocusNode? _productFocusNode;
 
   @override
   void initState() {
@@ -36,11 +43,12 @@ class _ReturnScreenState extends State<ReturnScreen> {
 
   Future<void> _loadInitialData() async {
     setState(() => _isLoadingData = true);
-    await _fetchCustomersAndProducts();
+    await _loadCustomersFromDB();
+    await _loadProductsFromDB();
     if (widget.transactionId != null) {
       await _loadExisting(widget.transactionId!);
     }
-    setState(() => _isLoadingData = false);
+    if (mounted) setState(() => _isLoadingData = false);
   }
 
   Future<void> _fetchCustomersAndProducts() async {
@@ -48,10 +56,12 @@ class _ReturnScreenState extends State<ReturnScreen> {
       final cust = await ApiService.fetchCustomers();
       final prod = await ApiService.fetchProducts();
 
-      setState(() {
-        customers = cust;
-        products = prod;
-      });
+      if (mounted) {
+        setState(() {
+          customers = cust;
+          products = prod;
+        });
+      }
     } catch (e) {
       debugPrint("API Error: $e");
     }
@@ -60,9 +70,11 @@ class _ReturnScreenState extends State<ReturnScreen> {
   Future<void> _loadCustomersFromDB() async {
     try {
       final rows = await (await AppDatabase.init()).query('Customer');
-      setState(() {
-        customers = rows.map((r) => r['Name'] as String).toList();
-      });
+      if (mounted) {
+        setState(() {
+          customers = rows.map((r) => r['Name'] as String).toSet().toList();
+        });
+      }
     } catch (e) {
       debugPrint('Error loading customers from DB: $e');
     }
@@ -71,15 +83,24 @@ class _ReturnScreenState extends State<ReturnScreen> {
   Future<void> _loadProductsFromDB() async {
     try {
       final rows = await (await AppDatabase.init()).query('Product');
-      setState(() {
-        products = rows
-            .map((r) => {
-                  'name': r['Name'] as String,
-                  'price': (r['UnitPrice'] as num).toInt(),
-                  'availableQty': r['AvailableQty'] as int,
-                })
-            .toList();
-      });
+      final Map<String, Map<String, dynamic>> unique = {};
+      for (var r in rows) {
+        final name = r['Name'] as String;
+        final id = r['ProductID'] as int;
+        if (!unique.containsKey(name) || (unique[name]!['id'] ?? 0) < id) {
+          unique[name] = {
+            'id': id,
+            'name': name,
+            'price': (r['UnitPrice'] as num).toInt(),
+            'availableQty': r['AvailableQty'] as int,
+          };
+        }
+      }
+      if (mounted) {
+        setState(() {
+          products = unique.values.toList();
+        });
+      }
     } catch (e) {
       debugPrint('Error loading products from DB: $e');
     }
@@ -90,7 +111,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
     try {
       final rows = await AppDatabase.getTransactionWithDetails(transactionId);
       if (rows.isEmpty) {
-        setState(() => _isLoading = false);
+        if (mounted) setState(() => _isLoading = false);
         return;
       }
       final header = rows.first;
@@ -112,7 +133,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
           });
         }
       }
-      setState(() => selectedProducts = loaded);
+      if (mounted) setState(() => selectedProducts = loaded);
     } catch (e) {
       debugPrint('Error loading return transaction: $e');
     } finally {
@@ -191,29 +212,67 @@ class _ReturnScreenState extends State<ReturnScreen> {
           const SnackBar(content: Text("Quantity exceeds available stock")));
       return;
     }
-    setState(() {
-      selectedProducts.add({
-        "name": productName,
-        "qty": qty,
-        "batch": batchText,
-        "price": selectedProduct!['price'],
+    if (mounted) {
+      setState(() {
+        selectedProducts.add({
+          "name": productName,
+          "qty": qty,
+          "batch": batchText,
+          "price": selectedProduct!['price'],
+        });
+        selectedProduct!['availableQty'] = available - qty;
+        selectedProduct = null;
+        qtyController.clear();
+        batchController.clear();
       });
-      selectedProduct!['availableQty'] = available - qty;
-      selectedProduct = null;
-      qtyController.clear();
-      batchController.clear();
-    });
+      
+      _productFocusNode?.requestFocus();
+    }
   }
 
   void cancel() {
-    setState(() {
-      selectedCustomer = null;
-      selectedProduct = null;
-      qtyController.clear();
-      batchController.clear();
-      remarksController.clear();
-      selectedProducts.clear();
-    });
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Text("Cancel Return",
+              style: TextStyle(fontWeight: FontWeight.bold)),
+          content: const Text("Are you sure you want to cancel this return?"),
+          actions: [
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () => Navigator.pop(context),
+              child: const Text("No", style: TextStyle(color: Colors.white)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () {
+                Navigator.pop(context);
+                setState(() {
+                  selectedCustomer = null;
+                  selectedProduct = null;
+                  qtyController.clear();
+                  batchController.clear();
+                  remarksController.clear();
+                  selectedProducts.clear();
+                });
+              },
+              child: const Text("Yes", style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Future<void> saveAs(String type) async {
@@ -256,6 +315,8 @@ class _ReturnScreenState extends State<ReturnScreen> {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text("Return updated (local)")));
+        Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const HomeScreen()), (route) => false);
+        return;
       } else {
         final existingId = await AppDatabase.findTransactionForCustomerOnDate(
             custId, type, DateTime.now());
@@ -284,14 +345,16 @@ class _ReturnScreenState extends State<ReturnScreen> {
         }
       }
 
-      setState(() {
-        selectedCustomer = null;
-        selectedProduct = null;
-        qtyController.clear();
-        batchController.clear();
-        remarksController.clear();
-        selectedProducts.clear();
-      });
+      if (mounted) {
+        setState(() {
+          selectedCustomer = null;
+          selectedProduct = null;
+          qtyController.clear();
+          batchController.clear();
+          remarksController.clear();
+          selectedProducts.clear();
+        });
+      }
     } catch (e) {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text("Error: $e")));
@@ -379,6 +442,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
                   setState(() {
                     selectedCustomer = selection;
                   });
+                  _productFocusNode?.requestFocus();
                 },
               ),
               const SizedBox(height: 16),
@@ -391,13 +455,14 @@ class _ReturnScreenState extends State<ReturnScreen> {
                     return products;
                   }
                   return products.where((p) => p['name']
+                      .toString()
                       .toLowerCase()
                       .contains(textEditingValue.text.toLowerCase()));
                 },
-                displayStringForOption: (p) =>
-                    "${p['name']}  (Available: ${p['availableQty']})",
+                displayStringForOption: (p) => p['name'] as String,
                 fieldViewBuilder:
                     (context, controller, focusNode, onEditingComplete) {
+                  _productFocusNode = focusNode;
                   return TextField(
                     controller: controller,
                     focusNode: focusNode,
@@ -405,7 +470,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
                     decoration: _inputDecoration("Select Product...."),
                     onChanged: (val) {
                       final found = products.firstWhere(
-                          (p) => p['name'].toLowerCase() == val.toLowerCase(),
+                          (p) => p['name'].toString().toLowerCase() == val.toLowerCase(),
                           orElse: () => {});
                       setState(() {
                         selectedProduct = found.isNotEmpty ? found : null;
@@ -417,6 +482,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
                   setState(() {
                     selectedProduct = p;
                   });
+                  _qtyFocusNode.requestFocus();
                 },
               ),
               const SizedBox(height: 16),
@@ -425,7 +491,10 @@ class _ReturnScreenState extends State<ReturnScreen> {
                   Expanded(
                     child: TextField(
                       controller: qtyController,
+                      focusNode: _qtyFocusNode,
                       keyboardType: TextInputType.number,
+                      textInputAction: TextInputAction.next,
+                      onSubmitted: (_) => _batchFocusNode.requestFocus(),
                       decoration: _inputDecoration("QTY"),
                     ),
                   ),
@@ -433,6 +502,9 @@ class _ReturnScreenState extends State<ReturnScreen> {
                   Expanded(
                     child: TextField(
                       controller: batchController,
+                      focusNode: _batchFocusNode,
+                      textInputAction: TextInputAction.next,
+                      onSubmitted: (_) => _remarksFocusNode.requestFocus(),
                       decoration: _inputDecoration("Batch No"),
                     ),
                   ),
@@ -441,6 +513,8 @@ class _ReturnScreenState extends State<ReturnScreen> {
               const SizedBox(height: 12),
               TextField(
                 controller: remarksController,
+                focusNode: _remarksFocusNode,
+                textInputAction: TextInputAction.done,
                 decoration: _inputDecoration("Remarks"),
                 maxLines: 2,
               ),

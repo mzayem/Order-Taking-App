@@ -61,6 +61,8 @@ class _UrlSetupScreenState extends State<UrlSetupScreen> {
         return;
       }
 
+      await prefs.setString('headerRef', headerRef.toString());
+
       /// 🔹 STEP 2: GET LICENSE
       final licenseUrl = "https://softifex-admin.techstersol.com/api/license"
           "?machineIP=$cleanUrl&id=$settingsId&name=$companyName";

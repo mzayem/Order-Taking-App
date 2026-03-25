@@ -15,6 +15,8 @@ import '../services/api_service.dart';
 import '../utils/ui_utils.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'dart:async';
+import 'dart:io';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -50,29 +52,47 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // Load Customers
     final custRows = await db.query('Customer');
-    _customers = custRows.map((r) {
-      return {
-        "id": r['CustomerID'] as int,
-        "name": r['Name'] as String,
-        "isNarcoticsAllowed": (r['IsNarcoticsAllowed'] as int? ?? 0) == 1,
-        "townId": r['Town']?.toString() ?? ''
-      };
-    }).toList();
+    final Map<String, Map<String, dynamic>> uniqueCustomers = {};
+    for (var r in custRows) {
+      final name = r['Name'] as String;
+      final id = r['CustomerID'] as int;
+      if (!uniqueCustomers.containsKey(name) ||
+          id > (uniqueCustomers[name]!['id'] as int)) {
+        uniqueCustomers[name] = {
+          "id": id,
+          "name": name,
+          "isNarcoticsAllowed": (r['IsNarcoticsAllowed'] as int? ?? 0) == 1,
+          "townId": r['Town']?.toString() ?? ''
+        };
+      }
+    }
+    _customers = uniqueCustomers.values.toList();
 
     // Load Products
     final prodRows = await db.query('Product');
-    _products = prodRows.map((r) {
-      return {
-        'id': r['ProductID'] as int,
-        'name': r['Name'] as String,
-        'price': ((r['UnitPrice'] as num?)?.toInt() ?? 0),
-        'availableQty': (r['AvailableQty'] as int?) ?? 0,
-        'type': r['ProductType']?.toString() ?? 'Medicine',
-      };
-    }).toList();
+    final Map<String, Map<String, dynamic>> uniqueProducts = {};
+    for (var r in prodRows) {
+      final name = r['Name'] as String;
+      final id = r['ProductID'] as int;
+      if (!uniqueProducts.containsKey(name) ||
+          id > (uniqueProducts[name]!['id'] as int)) {
+        uniqueProducts[name] = {
+          'id': id,
+          'name': name,
+          'price': ((r['UnitPrice'] as num?)?.toInt() ?? 0),
+          'availableQty': (r['AvailableQty'] as int?) ?? 0,
+          'type': r['ProductType']?.toString() ?? 'Medicine',
+        };
+      }
+    }
+    _products = uniqueProducts.values.toList();
 
     if (mounted) {
-      setState(() => _isLoadingData = false);
+      setState(() {
+        _isLoadingData = false;
+        _screens[1] = OrderScreen(customers: _customers, products: _products);
+        _screens[3] = const ReturnScreen();
+      });
     }
   }
 
@@ -131,6 +151,8 @@ class _OverviewScreenState extends State<OverviewScreen> {
   double _uploadProgress = 0.0;
   DateTime _selectedDate = DateTime.now();
   bool _isInit = true;
+  bool _isOnline = true;
+  Timer? _connectivityTimer;
   final Set<int> _selectedTxIds = {};
   List<Map<String, dynamic>> _transactions = [];
 
@@ -139,6 +161,32 @@ class _OverviewScreenState extends State<OverviewScreen> {
     super.initState();
     _selectedDate = DateTime.now();
     _loadTransactions();
+    _checkConnectivity();
+    _connectivityTimer = Timer.periodic(
+        const Duration(seconds: 10), (_) => _checkConnectivity());
+  }
+
+  Future<void> _checkConnectivity() async {
+    bool online = false;
+    try {
+      final result = await InternetAddress.lookup('google.com');
+      if (result.isNotEmpty && result[0].rawAddress.isNotEmpty) {
+        online = true;
+      }
+    } on SocketException catch (_) {
+      online = false;
+    }
+    if (mounted && _isOnline != online) {
+      setState(() {
+        _isOnline = online;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _connectivityTimer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -275,7 +323,56 @@ class _OverviewScreenState extends State<OverviewScreen> {
     );
   }
 
+  void _showInvalidAccessPopup() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text("InValid Access", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red)),
+        content: const Text("Your access is invalid. The server configuration has been changed."),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.black,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("OK", style: TextStyle(color: Colors.white)),
+          )
+        ],
+      ),
+    );
+  }
+
   Future<void> _fetchCustomersAndProducts({bool showDialog = false}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final baseUrl = prefs.getString('baseUrl') ?? '';
+    final savedHeaderRef = prefs.getString('headerRef');
+
+    if (baseUrl.isNotEmpty) {
+      try {
+        final settingRes = await http
+            .get(Uri.parse("$baseUrl/api/Setting"))
+            .timeout(const Duration(seconds: 10));
+        if (settingRes.statusCode == 200) {
+          final settingBody = jsonDecode(settingRes.body);
+          final currentHeaderRef = settingBody['headerRef']?.toString();
+
+          if (savedHeaderRef != null && currentHeaderRef != savedHeaderRef) {
+            if (mounted) {
+              _showInvalidAccessPopup();
+            }
+            return;
+          } else if (savedHeaderRef == null && currentHeaderRef != null) {
+            await prefs.setString('headerRef', currentHeaderRef);
+          }
+        }
+      } catch (e) {
+        debugPrint("HeaderRef sync error: $e");
+      }
+    }
+
     final customerStatus = ValueNotifier<int?>(0);
     final productStatus = ValueNotifier<int?>(0);
     final errorMessage = ValueNotifier<String?>(null);
@@ -318,6 +415,11 @@ class _OverviewScreenState extends State<OverviewScreen> {
 
     /// Refresh local DB → UI
     await _loadTransactions();
+
+    // Command the parent HomeScreen to forcefully reload arrays and recreate child screens
+    if (mounted) {
+      context.findAncestorStateOfType<_HomeScreenState>()?.refreshData();
+    }
   }
   // Future<void> testPushTransaction() async {
   //   try {
@@ -435,50 +537,54 @@ class _OverviewScreenState extends State<OverviewScreen> {
     final List<int> validIdsToUpload = [];
 
     for (var id in ids) {
-       final tx = _transactions.firstWhere((t) => t['transactionId'] == id, orElse: () => <String, dynamic>{});
-       if (tx.isNotEmpty && tx['syncStatus'] == 'Synced') {
-          alreadyUploadedCount++;
-       } else {
-          validIdsToUpload.add(id);
-       }
+      final tx = _transactions.firstWhere((t) => t['transactionId'] == id,
+          orElse: () => <String, dynamic>{});
+      if (tx.isNotEmpty && tx['syncStatus'] == 'Synced') {
+        alreadyUploadedCount++;
+      } else {
+        validIdsToUpload.add(id);
+      }
     }
 
     if (alreadyUploadedCount == ids.length) {
-       UiUtils.showBeautifulSnackBar(context, 'Already upload', isSuccess: false);
-       setState(() {
-          _selectionMode = false;
-          _selectedTxIds.clear();
-       });
-       return;
+      UiUtils.showBeautifulSnackBar(context, 'Already upload',
+          isSuccess: false);
+      setState(() {
+        _selectionMode = false;
+        _selectedTxIds.clear();
+      });
+      return;
     }
 
     if (alreadyUploadedCount > 0 && ids.length > 1) {
-       final proceed = await showDialog<bool>(
-         context: context,
-         builder: (ctx) => AlertDialog(
-           title: const Text('Upload Summary'),
-           content: Text('Total cards selected: ${ids.length}\nAlready uploaded: $alreadyUploadedCount\nReady to upload: ${validIdsToUpload.length}'),
-           actions: [
-             TextButton(
-               onPressed: () => Navigator.pop(ctx, false),
-               child: const Text('Cancel', style: TextStyle(color: Colors.red)),
-             ),
-             ElevatedButton(
-               onPressed: () => Navigator.pop(ctx, true),
-               style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
-               child: const Text('Proceed', style: TextStyle(color: Colors.white)),
-             ),
-           ],
-         ),
-       );
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Upload Summary'),
+          content: Text(
+              'Total cards selected: ${ids.length}\nAlready uploaded: $alreadyUploadedCount\nReady to upload: ${validIdsToUpload.length}'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel', style: TextStyle(color: Colors.red)),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
+              child:
+                  const Text('Proceed', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      );
 
-       if (proceed != true) {
-         setState(() {
-            _selectionMode = false;
-            _selectedTxIds.clear();
-         });
-         return;
-       }
+      if (proceed != true) {
+        setState(() {
+          _selectionMode = false;
+          _selectedTxIds.clear();
+        });
+        return;
+      }
     }
 
     setState(() {
@@ -564,17 +670,17 @@ class _OverviewScreenState extends State<OverviewScreen> {
       for (final id in validIdsToUpload) {
         await AppDatabase.markTransactionSynced(id);
       }
-      
+
       final Map<dynamic, dynamic> data = syncRes['data'] ?? {};
       String msg = 'Upload success: ${validIdsToUpload.length} transactions';
       if (data.containsKey('message')) {
-         msg = data['message'].toString();
+        msg = data['message'].toString();
       } else if (data.containsKey('response')) {
-         msg = data['response'].toString();
+        msg = data['response'].toString();
       }
-      
+
       if (mounted) {
-         UiUtils.showBeautifulSnackBar(context, msg, isSuccess: true);
+        UiUtils.showBeautifulSnackBar(context, msg, isSuccess: true);
       }
     } else {
       for (final id in validIdsToUpload) {
@@ -582,13 +688,14 @@ class _OverviewScreenState extends State<OverviewScreen> {
       }
       debugPrint('Upload failed: ${syncRes['error']}');
       debugPrint('API response: ${syncRes['response']}');
-      
+
       String errorMsg = '${syncRes['error']}';
-      if (syncRes['response'] != null && syncRes['response'].toString().isNotEmpty) {
-          errorMsg += ' - ${syncRes['response']}';
+      if (syncRes['response'] != null &&
+          syncRes['response'].toString().isNotEmpty) {
+        errorMsg += ' - ${syncRes['response']}';
       }
       if (mounted) {
-         UiUtils.showBeautifulSnackBar(context, errorMsg, isSuccess: false);
+        UiUtils.showBeautifulSnackBar(context, errorMsg, isSuccess: false);
       }
     }
 
@@ -832,6 +939,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
                         await AppDatabase.init();
                         await _loadTransactions();
 
+                        Navigator.pop(context);
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
                             content: Text("Data cleared successfully"),
@@ -863,7 +971,8 @@ class _OverviewScreenState extends State<OverviewScreen> {
 
     if (syncStatus == 'Synced') {
       if (mounted) {
-        UiUtils.showBeautifulSnackBar(context, 'Cannot edit an uploaded $type', isSuccess: false);
+        UiUtils.showBeautifulSnackBar(context, 'Cannot edit an uploaded $type',
+            isSuccess: false);
       }
       setState(() {
         _selectionMode = false;
@@ -1100,59 +1209,59 @@ class _OverviewScreenState extends State<OverviewScreen> {
                         ElevatedButton.icon(
                           onPressed: () async {
                             Navigator.of(ctx).pop();
-                          if (type == 'Order') {
-                            await Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => OrderScreen(
-                                  transactionId: transactionId,
-                                  customers: context
-                                          .findAncestorStateOfType<
-                                              _HomeScreenState>()
-                                          ?._customers ??
-                                      [],
-                                  products: context
-                                          .findAncestorStateOfType<
-                                              _HomeScreenState>()
-                                          ?._products ??
-                                      [],
+                            if (type == 'Order') {
+                              await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => OrderScreen(
+                                    transactionId: transactionId,
+                                    customers: context
+                                            .findAncestorStateOfType<
+                                                _HomeScreenState>()
+                                            ?._customers ??
+                                        [],
+                                    products: context
+                                            .findAncestorStateOfType<
+                                                _HomeScreenState>()
+                                            ?._products ??
+                                        [],
+                                  ),
                                 ),
-                              ),
-                            );
-                          } else if (type == 'Cash') {
-                            await Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) =>
-                                    CashScreen(transactionId: transactionId),
-                              ),
-                            );
-                          } else if (type == 'Return') {
-                            await Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) =>
-                                    ReturnScreen(transactionId: transactionId),
-                              ),
-                            );
-                          } else {
-                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                                content: Text(
-                                    'Edit for "$type" not implemented yet.')));
-                          }
-                          await _loadTransactions();
-                          if (mounted) setState(() {});
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.teal,
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
+                              );
+                            } else if (type == 'Cash') {
+                              await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) =>
+                                      CashScreen(transactionId: transactionId),
+                                ),
+                              );
+                            } else if (type == 'Return') {
+                              await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => ReturnScreen(
+                                      transactionId: transactionId),
+                                ),
+                              );
+                            } else {
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                                  content: Text(
+                                      'Edit for "$type" not implemented yet.')));
+                            }
+                            await _loadTransactions();
+                            if (mounted) setState(() {});
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.teal,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
                           ),
+                          icon: const Icon(Icons.edit, size: 18),
+                          label: const Text('Edit'),
                         ),
-                        icon: const Icon(Icons.edit, size: 18),
-                        label: const Text('Edit'),
-                      ),
                     ],
                   )
                 ],
@@ -1198,10 +1307,51 @@ class _OverviewScreenState extends State<OverviewScreen> {
     return Scaffold(
       backgroundColor: Colors.grey[100],
       appBar: AppBar(
-        title: Text(
-          _selectionMode
-              ? "${_selectedTxIds.length} Selected"
-              : _formatDayDate(_selectedDate),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              "Softifex",
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.5,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: _isOnline
+                    ? Colors.green.withOpacity(0.2)
+                    : Colors.red.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: _isOnline ? Colors.greenAccent : Colors.redAccent,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    _isOnline ? "Online" : "Offline",
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: _isOnline ? Colors.greenAccent : Colors.redAccent,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
@@ -1278,6 +1428,31 @@ class _OverviewScreenState extends State<OverviewScreen> {
               icon: const Icon(Icons.sync),
               tooltip: "Sync Transactions",
               onPressed: () async {
+                final proceed = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('Sync Transactions'),
+                    content: const Text(
+                        'Do you want to sync all pending transactions to the server?'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: const Text('Cancel',
+                            style: TextStyle(color: Colors.grey)),
+                      ),
+                      ElevatedButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.teal),
+                        child: const Text('Sync',
+                            style: TextStyle(color: Colors.white)),
+                      ),
+                    ],
+                  ),
+                );
+
+                if (proceed != true) return;
+
                 showDialog(
                   context: context,
                   barrierDismissible: false,
@@ -1292,13 +1467,58 @@ class _OverviewScreenState extends State<OverviewScreen> {
 
                 if (mounted) {
                   if (result['ok'] == true) {
-                    UiUtils.showBeautifulSnackBar(context, result['message']?.toString() ?? 'Sync successful', isSuccess: true);
+                    UiUtils.showBeautifulSnackBar(context,
+                        result['message']?.toString() ?? 'Sync successful',
+                        isSuccess: true);
                   } else {
-                    UiUtils.showBeautifulSnackBar(context, result['error']?.toString() ?? 'Sync failed', isSuccess: false);
+                    UiUtils.showBeautifulSnackBar(
+                        context, result['error']?.toString() ?? 'Sync failed',
+                        isSuccess: false);
                   }
                 }
 
                 _loadTransactions();
+              },
+            ),
+
+          /// Delete Button (only if something is selected)
+          if (_selectionMode && _selectedTxIds.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.delete),
+              tooltip: 'Delete selected',
+              onPressed: () {
+                showDialog(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('Delete Items'),
+                    content: Text(
+                        'Are you sure you want to delete ${_selectedTxIds.length} item(s)?'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text('Cancel',
+                            style: TextStyle(color: Colors.grey)),
+                      ),
+                      ElevatedButton(
+                        onPressed: () async {
+                          Navigator.pop(ctx);
+                          for (final id in _selectedTxIds) {
+                            await AppDatabase.deleteTransaction(id);
+                          }
+                          setState(() {
+                            _selectionMode = false;
+                            _selectedTxIds.clear();
+                          });
+                          await _loadTransactions();
+                        },
+                        style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red),
+                        child: const Text('Delete',
+                            style: TextStyle(color: Colors.white)),
+                      ),
+                    ],
+                  ),
+                );
               },
             ),
 

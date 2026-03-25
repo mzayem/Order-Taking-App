@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:sqflite/sqflite.dart';
 import 'dart:convert';
 import '../db/database.dart';
+import 'home_screen.dart';
 
 class OrderScreen extends StatefulWidget {
   final int? transactionId;
@@ -31,6 +32,7 @@ class _OrderScreenState extends State<OrderScreen> {
   Map<String, dynamic>? selectedProduct;
 
   final TextEditingController qtyController = TextEditingController();
+  final FocusNode _qtyFocusNode = FocusNode();
   List<Map<String, dynamic>> selectedProducts = [];
 
   bool _isLoading = false;
@@ -39,6 +41,9 @@ class _OrderScreenState extends State<OrderScreen> {
 
   double customerBalance = 0.0;
   bool isBalanceLoading = false;
+
+  FocusNode? _productFocusNode;
+
   @override
   void initState() {
     super.initState();
@@ -50,11 +55,53 @@ class _OrderScreenState extends State<OrderScreen> {
   Future<void> _loadInitialData() async {
     setState(() => _isLoadingData = true);
 
+    await _loadCustomersFromDB();
+    await _loadProductsFromDB();
+
     if (widget.transactionId != null) {
       await _loadExistingTransaction(widget.transactionId!);
     }
 
-    setState(() => _isLoadingData = false);
+    if (mounted) setState(() => _isLoadingData = false);
+  }
+
+  Future<void> _loadCustomersFromDB() async {
+    try {
+      final db = await AppDatabase.init();
+      final rows = await db.query('Customer');
+      final maps = rows.map((r) => {
+            "id": r['CustomerID'],
+            "name": r['Name'],
+            "isNarcoticsAllowed": r['IsNarcoticsAllowed'] == 1,
+          }).toList();
+      if (mounted) setState(() => customers = maps);
+    } catch (e) {
+      debugPrint("DB err: $e");
+    }
+  }
+
+  Future<void> _loadProductsFromDB() async {
+    try {
+      final db = await AppDatabase.init();
+      final rows = await db.query('Product');
+      final Map<String, Map<String, dynamic>> uniqueProd = {};
+      for (var r in rows) {
+        final name = r['Name'] as String;
+        final id = r['ProductID'] as int;
+        if (!uniqueProd.containsKey(name) || (uniqueProd[name]!['id'] ?? 0) < id) {
+          uniqueProd[name] = {
+            'id': id,
+            'name': name,
+            'price': (r['UnitPrice'] as num).toInt(),
+            'availableQty': r['AvailableQty'] as int,
+            'type': r['Type'],
+          };
+        }
+      }
+      if (mounted) setState(() => products = uniqueProd.values.toList());
+    } catch (e) {
+      debugPrint("DB err: $e");
+    }
   }
 
   /// FETCH DATA FROM API
@@ -90,23 +137,27 @@ class _OrderScreenState extends State<OrderScreen> {
         final data = jsonDecode(response.body);
 
         if (data['status'] == 'success') {
-          setState(() {
-            customerBalance = (data['balance'] ?? 0).toDouble();
-          });
+          if (mounted) {
+            setState(() {
+              customerBalance = (data['balance'] ?? 0).toDouble();
+            });
+          }
         }
       }
     } catch (e) {
       print("Balance fetch error: $e");
     } finally {
-      setState(() {
-        isBalanceLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          isBalanceLoading = false;
+        });
+      }
     }
   }
 
   /// LOAD EXISTING ORDER
 
-  void addProduct() {
+  Future<void> addProduct() async {
     if (selectedCustomerObj == null) {
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text("Select customer first")));
@@ -124,9 +175,44 @@ class _OrderScreenState extends State<OrderScreen> {
       }
 
       if (qty > available) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Quantity exceeds stock")));
-        return;
+        bool? proceed = await showDialog<bool>(
+          context: context,
+          builder: (context) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20)),
+              title: const Text("Quantity Exceeds",
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+              content: const Text(
+                  "The entered quantity exceeds the available stock. Do you want to add it anyway?"),
+              actions: [
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text("No", style: TextStyle(color: Colors.white)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text("Yes", style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            );
+          },
+        );
+
+        if (proceed != true) {
+          return;
+        }
+        if (!mounted) return;
       }
 
       // Narcotics warning
@@ -156,6 +242,8 @@ class _OrderScreenState extends State<OrderScreen> {
         qtyController.clear();
         selectedProduct = null;
       });
+
+      _productFocusNode?.requestFocus();
     }
   }
 
@@ -172,7 +260,17 @@ class _OrderScreenState extends State<OrderScreen> {
     if (rows.isNotEmpty) {
       final header = rows.first;
 
-      selectedCustomer = header['CustomerName'];
+      final db = await AppDatabase.init();
+      final custId = header['CustomerID'] as int?;
+      if (custId != null) {
+        final custRows = await db.query('Customer',
+            where: 'CustomerID = ?', whereArgs: [custId], limit: 1);
+        if (custRows.isNotEmpty) {
+          selectedCustomer = custRows.first['Name'] as String?;
+          selectedCustomerObj = {"id": custId, "name": selectedCustomer};
+          _fetchCustomerBalance(custId);
+        }
+      }
 
       selectedProducts = rows.map((r) {
         return {
@@ -184,7 +282,7 @@ class _OrderScreenState extends State<OrderScreen> {
       }).toList();
     }
 
-    setState(() => _isLoading = false);
+    if (mounted) setState(() => _isLoading = false);
   }
 
   /// --------------------- SAVE ORDER ---------------------
@@ -229,6 +327,8 @@ class _OrderScreenState extends State<OrderScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text("$type updated (local)")));
+      Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const HomeScreen()), (route) => false);
+      return;
     } else {
       // New save — reuse today's pending/failed card if one exists
       final existingId = await AppDatabase.findTransactionForCustomerOnDate(
@@ -256,26 +356,72 @@ class _OrderScreenState extends State<OrderScreen> {
       }
     }
 
-    setState(() {
-      selectedCustomer = null;
-      selectedProduct = null;
-      selectedProducts = [];
-      qtyController.clear();
-    });
+    if (mounted) {
+      setState(() {
+        selectedCustomer = null;
+        selectedProduct = null;
+        selectedProducts = [];
+        qtyController.clear();
+      });
+    }
   }
 
   void _cancelOrder() {
-    setState(() {
-      selectedCustomer = null;
-      selectedProducts.clear();
-      qtyController.clear();
-    });
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Text("Cancel Order",
+              style: TextStyle(fontWeight: FontWeight.bold)),
+          content: const Text("Are you sure you want to cancel this order?"),
+          actions: [
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () => Navigator.pop(context),
+              child: const Text("No", style: TextStyle(color: Colors.white)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () {
+                Navigator.pop(context);
+                setState(() {
+                  selectedCustomer = null;
+                  selectedProducts.clear();
+                  qtyController.clear();
+                });
+              },
+              child: const Text("Yes", style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   /// UI (UNCHANGED)
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoadingData) {
+      return Scaffold(
+        appBar: AppBar(
+          title: Text(widget.transactionId == null ? "Order" : "Edit Order"),
+          backgroundColor: Colors.black,
+        ),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -297,6 +443,9 @@ class _OrderScreenState extends State<OrderScreen> {
                 style: TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 6),
             Autocomplete<Map<String, dynamic>>(
+              initialValue: selectedCustomer != null
+                  ? TextEditingValue(text: selectedCustomer!)
+                  : const TextEditingValue(),
               displayStringForOption: (option) =>
                   option['name']?.toString() ?? '',
               optionsBuilder: (TextEditingValue textEditingValue) {
@@ -312,6 +461,7 @@ class _OrderScreenState extends State<OrderScreen> {
                 });
 
                 _fetchCustomerBalance(selection['id']);
+                _productFocusNode?.requestFocus();
               },
               fieldViewBuilder:
                   (context, controller, focusNode, onFieldSubmitted) {
@@ -332,7 +482,7 @@ class _OrderScreenState extends State<OrderScreen> {
                 style: TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 6),
             Autocomplete<Map<String, dynamic>>(
-              displayStringForOption: (option) => option['name'],
+              displayStringForOption: (option) => "${option['name']}  ",
               optionsBuilder: (TextEditingValue textEditingValue) {
                 if (textEditingValue.text.isEmpty) {
                   return const Iterable<Map<String, dynamic>>.empty();
@@ -344,9 +494,11 @@ class _OrderScreenState extends State<OrderScreen> {
               },
               onSelected: (selection) {
                 setState(() => selectedProduct = selection);
+                _qtyFocusNode.requestFocus();
               },
               fieldViewBuilder:
                   (context, controller, focusNode, onFieldSubmitted) {
+                _productFocusNode = focusNode;
                 controller.text = selectedProduct?['name'] ?? '';
 
                 return TextField(
@@ -365,6 +517,7 @@ class _OrderScreenState extends State<OrderScreen> {
                 Expanded(
                   child: TextField(
                     controller: qtyController,
+                    focusNode: _qtyFocusNode,
                     decoration: const InputDecoration(
                       labelText: "QTY",
                       border: OutlineInputBorder(),

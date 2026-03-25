@@ -34,8 +34,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _logout(BuildContext context) async {
     final prefs = await SharedPreferences.getInstance();
 
+    final baseUrl = prefs.getString('baseUrl');
+
     // 🔥 Clear all session data
     await prefs.clear();
+
+    if (baseUrl != null) {
+      await prefs.setString('baseUrl', baseUrl);
+    }
 
     Navigator.pushAndRemoveUntil(
       context,

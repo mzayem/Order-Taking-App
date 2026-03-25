@@ -1,9 +1,13 @@
 // lib/screens/cash_screen.dart
 
 import 'package:flutter/material.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../db/database.dart';
 import 'services/api_service.dart';
+import 'home_screen.dart';
 
 class CashScreen extends StatefulWidget {
   final int? transactionId;
@@ -18,12 +22,17 @@ class _CashScreenState extends State<CashScreen> {
   final TextEditingController _amountController = TextEditingController();
   final TextEditingController _remarksController = TextEditingController();
 
+  final FocusNode _amountFocusNode = FocusNode();
+
   String? _selectedCustomer;
   bool _isSaving = false;
   bool _isLoading = false;
   bool _isLoadingData = true;
 
   List<String> _customers = [];
+  List<Map<String, dynamic>> _customersMap = [];
+  double customerBalance = 0.0;
+  bool isBalanceLoading = false;
 
   @override
   void initState() {
@@ -41,23 +50,75 @@ class _CashScreenState extends State<CashScreen> {
   }
 
   Future<void> _fetchCustomers() async {
-    final customersList = await ApiService.fetchCustomers();
+    final db = await AppDatabase.init();
+    final custRows = await db.query('Customer');
+
+    final Map<String, Map<String, dynamic>> uniqueCustomers = {};
+    for (var r in custRows) {
+      final name = r['Name'] as String;
+      final id = r['CustomerID'] as int;
+      if (!uniqueCustomers.containsKey(name) ||
+          id > (uniqueCustomers[name]!['id'] as int)) {
+        uniqueCustomers[name] = {"id": id, "name": name};
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _customersMap = uniqueCustomers.values.toList();
+        _customers = _customersMap.map((c) => c['name'] as String).toList();
+      });
+    }
+  }
+
+  Future<void> _fetchCustomerBalance(int customerId) async {
+    if (customerId == 0) return;
+    final prefs = await SharedPreferences.getInstance();
+
+    final baseUrl = prefs.getString('baseUrl') ?? '';
+    final userId = prefs.getString('userId') ?? '';
+
+    if (baseUrl.isEmpty || userId.isEmpty) return;
 
     setState(() {
-      _customers = customersList;
+      isBalanceLoading = true;
     });
+
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/Customer/balanceFetch'),
+        headers: {
+          "accept": "*/*",
+          "Content-Type": "application/json",
+        },
+        body: jsonEncode({
+          "userId": userId,
+          "customerId": customerId,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+
+        if (data['status'] == 'success') {
+          setState(() {
+            customerBalance = (data['balance'] ?? 0).toDouble();
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint("Balance fetch error: $e");
+    } finally {
+      if (mounted) {
+        setState(() {
+          isBalanceLoading = false;
+        });
+      }
+    }
   }
 
   Future<void> _loadCustomersFromDB() async {
-    try {
-      final db = await AppDatabase.init();
-      final rows = await db.query('Customer');
-      setState(() {
-        _customers = rows.map((r) => r['Name'] as String).toList();
-      });
-    } catch (e) {
-      debugPrint('Error loading customers from DB: $e');
-    }
+    await _fetchCustomers();
   }
 
   Future<void> _loadExisting(int transactionId) async {
@@ -77,6 +138,7 @@ class _CashScreenState extends State<CashScreen> {
             where: 'CustomerID = ?', whereArgs: [custId], limit: 1);
         if (custRows.isNotEmpty) {
           _selectedCustomer = custRows.first['Name'] as String?;
+          _fetchCustomerBalance(custId);
         }
       }
 
@@ -118,6 +180,8 @@ class _CashScreenState extends State<CashScreen> {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Cash updated (local)')));
+        Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const HomeScreen()), (route) => false);
+        return;
       } else {
         final existingId = await AppDatabase.findTransactionForCustomerOnDate(
             customerId, 'Cash', DateTime.now());
@@ -227,6 +291,13 @@ class _CashScreenState extends State<CashScreen> {
                 },
                 onSelected: (String selection) {
                   setState(() => _selectedCustomer = selection);
+                  final found = _customersMap.firstWhere(
+                      (c) => c['name'] == selection,
+                      orElse: () => <String, dynamic>{});
+                  if (found.isNotEmpty) {
+                    _fetchCustomerBalance(found['id'] as int);
+                  }
+                  _amountFocusNode.requestFocus();
                 },
                 fieldViewBuilder:
                     (context, controller, focusNode, onEditingComplete) {
@@ -239,9 +310,11 @@ class _CashScreenState extends State<CashScreen> {
                   );
                 },
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 10),
               TextFormField(
                 controller: _amountController,
+                focusNode: _amountFocusNode,
+                textInputAction: TextInputAction.done,
                 keyboardType: TextInputType.number,
                 decoration: inputDecoration("Enter Amount (Rs)"),
                 validator: (v) {
@@ -254,6 +327,22 @@ class _CashScreenState extends State<CashScreen> {
                 },
               ),
               const SizedBox(height: 30),
+              if (_selectedCustomer != null && _selectedCustomer!.isNotEmpty)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: isBalanceLoading
+                      ? const Text("Loading balance...",
+                          style: TextStyle(color: Colors.grey))
+                      : Text(
+                          "Remaining Balance: Rs.${customerBalance.toStringAsFixed(2)}",
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.red,
+                          ),
+                        ),
+                ),
+              const SizedBox(height: 50),
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
