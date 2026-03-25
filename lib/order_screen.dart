@@ -10,11 +10,11 @@ class OrderScreen extends StatefulWidget {
   final int? transactionId;
   final List<Map<String, dynamic>> customers;
   final List<Map<String, dynamic>> products;
-  
+
   const OrderScreen({
-    super.key, 
-    this.transactionId, 
-    this.customers = const [], 
+    super.key,
+    this.transactionId,
+    this.customers = const [],
     this.products = const [],
   });
 
@@ -34,7 +34,7 @@ class _OrderScreenState extends State<OrderScreen> {
   List<Map<String, dynamic>> selectedProducts = [];
 
   bool _isLoading = false;
-  bool _isSaving = false;
+  final bool _isSaving = false;
   bool _isLoadingData = true;
 
   double customerBalance = 0.0;
@@ -227,8 +227,8 @@ class _OrderScreenState extends State<OrderScreen> {
         details: details,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("$type updated (local)")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("$type updated (local)")));
     } else {
       // New save — reuse today's pending/failed card if one exists
       final existingId = await AppDatabase.findTransactionForCustomerOnDate(
@@ -242,8 +242,8 @@ class _OrderScreenState extends State<OrderScreen> {
           details: details,
         );
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("$type updated (local)")));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text("$type updated (local)")));
       } else {
         final txnId = await AppDatabase.createTransactionWithDetails(
           customerId: custId,
@@ -471,21 +471,9 @@ class _OrderScreenState extends State<OrderScreen> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: () => _saveOrderAs("Draft"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blue[300],
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
-                    child: const Text("Draft"),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton(
                     onPressed: () => _saveOrderAs("Order"),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.black,
+                      backgroundColor: Colors.green,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 14),
                     ),

@@ -380,27 +380,69 @@ class ApiService {
     }
   }
 
-  static Future<int> syncAllTransactions() async {
-    final db = await AppDatabase.init();
+  static Future<Map<String, dynamic>> syncAllTransactions() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final baseUrl = prefs.getString('baseUrl') ?? '';
+      final userId = (prefs.getString('userId') ?? '').trim();
 
-    final pendingTransactions = await db.query(
-      '"Transaction"',
-      where: 'SyncStatus = ?',
-      whereArgs: ['Pending'],
-    );
-
-    int syncedCount = 0;
-
-    for (var tx in pendingTransactions) {
-      int transactionId = tx['TransactionID'] as int;
-
-      bool success = await uploadTransaction(transactionId);
-
-      if (success) {
-        syncedCount++;
+      if (baseUrl.isEmpty || userId.isEmpty) {
+        return {'ok': false, 'error': 'Base URL or User ID not configured'};
       }
-    }
 
-    return syncedCount;
+      final db = await AppDatabase.init();
+      final pendingTransactions = await db.query(
+        '"Transaction"',
+        where: 'SyncStatus = ?',
+        whereArgs: ['Pending'],
+      );
+
+      if (pendingTransactions.isEmpty) {
+        return {'ok': true, 'message': 'Everything is already synced.'};
+      }
+
+      final dataList = <Map<String, dynamic>>[];
+      final txIds = <int>[];
+
+      for (var tx in pendingTransactions) {
+        int transactionId = tx['TransactionID'] as int;
+        final payload = await _buildTransactionPayload(transactionId);
+        if (payload != null) {
+          dataList.add(payload);
+          txIds.add(transactionId);
+        }
+      }
+
+      if (dataList.isEmpty) {
+        return {'ok': false, 'error': 'Could not build payload for pending transactions'};
+      }
+
+      final result = await uploadTransactions(
+        baseUrl: baseUrl,
+        userId: userId,
+        dataList: dataList,
+      );
+
+      if (result['ok'] == true) {
+        for (var id in txIds) {
+          await AppDatabase.markTransactionSynced(id);
+        }
+        final Map<String, dynamic> data = result['data'] ?? {};
+        String msg = 'Successfully synced ${txIds.length} transactions';
+        if (data.containsKey('message')) {
+           msg = data['message'].toString();
+        } else if (data.containsKey('response')) {
+           msg = data['response'].toString();
+        }
+        return {'ok': true, 'message': msg};
+      } else {
+        for (var id in txIds) {
+          await AppDatabase.markTransactionFailed(id);
+        }
+        return result;
+      }
+    } catch (e) {
+      return {'ok': false, 'error': e.toString()};
+    }
   }
 }

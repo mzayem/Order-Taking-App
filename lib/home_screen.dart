@@ -12,6 +12,7 @@ import 'profile_screen.dart';
 // Local database + Sync
 import '../db/database.dart';
 import '../services/api_service.dart';
+import '../utils/ui_utils.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
@@ -53,7 +54,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return {
         "id": r['CustomerID'] as int,
         "name": r['Name'] as String,
-        "isNarcoticsAllowed": (r['IsNarcotics'] as int? ?? 0) == 1,
+        "isNarcoticsAllowed": (r['IsNarcoticsAllowed'] as int? ?? 0) == 1,
         "townId": r['Town']?.toString() ?? ''
       };
     }).toList();
@@ -129,7 +130,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
   bool _isUploading = false;
   double _uploadProgress = 0.0;
   DateTime _selectedDate = DateTime.now();
-
+  bool _isInit = true;
   final Set<int> _selectedTxIds = {};
   List<Map<String, dynamic>> _transactions = [];
 
@@ -138,7 +139,19 @@ class _OverviewScreenState extends State<OverviewScreen> {
     super.initState();
     _selectedDate = DateTime.now();
     _loadTransactions();
-    _fetchCustomersAndProducts();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+
+    if (_isInit) {
+      _isInit = false;
+
+      Future.microtask(() async {
+        await _fetchCustomersAndProducts();
+      });
+    }
   }
 
   // Status Tracking: 0 = Loading, 1 = Success, -1 = Error, null = Not Started
@@ -262,125 +275,50 @@ class _OverviewScreenState extends State<OverviewScreen> {
     );
   }
 
-  Future<void> _fetchCustomersAndProducts() async {
-    final prefs = await SharedPreferences.getInstance();
-
-    final baseUrl = prefs.getString('baseUrl') ?? '';
-    final userId = prefs.getString('userId') ?? '';
-    final townIds =
-        prefs.getStringList('townIds')?.map(int.parse).toList() ?? [];
-
-    if (baseUrl.isEmpty || userId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Missing Configuration Setup")));
-      return;
-    }
-
-    // Initialize tracking variables
-    final customerStatus = ValueNotifier<int?>(0); // 0 = loading
+  Future<void> _fetchCustomersAndProducts({bool showDialog = false}) async {
+    final customerStatus = ValueNotifier<int?>(0);
     final productStatus = ValueNotifier<int?>(0);
     final errorMessage = ValueNotifier<String?>(null);
 
-    if (mounted) {
+    if (mounted && showDialog) {
       _showSyncDialog(context, customerStatus, productStatus, errorMessage);
     }
 
-    // ------------------- CUSTOMERS -------------------
-    if (townIds.isNotEmpty) {
-      try {
-        final response = await http
-            .post(
-              Uri.parse('$baseUrl/api/Customer/customerFetch'),
-              headers: {"Content-Type": "application/json"},
-              body: jsonEncode({"userId": userId, "townIds": townIds}),
-            )
-            .timeout(const Duration(seconds: 15));
+    /// ------------------- CUSTOMERS -------------------
+    try {
+      final customers = await ApiService.fetchCustomers();
 
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body) as Map<String, dynamic>?;
-
-          if (data != null && data['status'] == 'success') {
-            final List customersList = data['customers'] as List? ?? [];
-            for (var c in customersList) {
-              await AppDatabase.upsertCustomer({
-                'CustomerID': c['customerId'] ?? 0,
-                'Name': c['customerName']?.toString() ?? '',
-                'Town': c['townID']?.toString() ?? '',
-                'IsNarcotics':
-                    (c['isNarcoticsAllowed'] as bool? ?? true) ? 1 : 0,
-              });
-            }
-            customerStatus.value = 1; // Success
-          } else {
-            customerStatus.value = -1; // Failed
-            errorMessage.value = "Failed to parse Customer JSON";
-          }
-        } else {
-          customerStatus.value = -1;
-          errorMessage.value = "Customer API Error: ${response.statusCode}";
-        }
-      } catch (e) {
+      if (customers.isNotEmpty) {
+        customerStatus.value = 1;
+      } else {
         customerStatus.value = -1;
-        errorMessage.value = "Customer Network Error";
-        debugPrint("Customer fetch error: $e");
+        errorMessage.value = "No customers found";
       }
-    } else {
+    } catch (e) {
       customerStatus.value = -1;
-      errorMessage.value = "No Towns configured for this user";
+      errorMessage.value = "Customer fetch error";
+      debugPrint("Customer API error: $e");
     }
 
-    // ------------------- PRODUCTS -------------------
+    /// ------------------- PRODUCTS -------------------
     try {
-      final response = await http
-          .post(
-            Uri.parse('$baseUrl/api/Products/getProduct'),
-            headers: {"Content-Type": "application/json"},
-            body: jsonEncode({"userId": userId}),
-          )
-          .timeout(const Duration(seconds: 15));
+      final products = await ApiService.fetchProducts();
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>?;
-
-        if (data != null && data['status'] == 'success') {
-          final List productList = data['products'] as List? ?? [];
-          for (var p in productList) {
-            await AppDatabase.upsertProduct({
-              'ProductID': p['productId'] ?? 0,
-              'Name': p['productName']?.toString() ?? '',
-              'Code': (p['productId'] ?? 0).toString(),
-              'ProductType': p['productType']?.toString() ?? 'Medicine',
-              'UnitPrice': ((p['latestPrice'] ?? 0) as num).toDouble(),
-              'AvailableQty': p['totalQty'] ?? 0,
-            });
-          }
-          productStatus.value = 1; // Success
-        } else {
-          productStatus.value = -1;
-          errorMessage.value ??= "Failed to parse Product JSON";
-        }
+      if (products.isNotEmpty) {
+        productStatus.value = 1;
       } else {
         productStatus.value = -1;
-        errorMessage.value ??= "Product API Error: ${response.statusCode}";
+        errorMessage.value ??= "No products found";
       }
     } catch (e) {
       productStatus.value = -1;
-      errorMessage.value ??= "Product Network Error";
-      debugPrint("Product fetch error: $e");
+      errorMessage.value ??= "Product fetch error";
+      debugPrint("Product API error: $e");
     }
 
-    // Auto-close dialog after 1.5 seconds if both are successful
-    // if (customerStatus.value == 1 && productStatus.value == 1) {
-    //   await Future.delayed(const Duration(milliseconds: 1500));
-    //   if (mounted && Navigator.canPop(context)) {
-    //     Navigator.pop(context);
-    //   }
-    // }
-
-    // Refresh local lists
-    // _loadLocalData();
+    /// Refresh local DB → UI
+    await _loadTransactions();
   }
-
   // Future<void> testPushTransaction() async {
   //   try {
   //     const baseUrl = "http://app.dmcgroup.pk:2004";
@@ -492,6 +430,57 @@ class _OverviewScreenState extends State<OverviewScreen> {
   Future<void> _uploadSelected() async {
     if (_selectedTxIds.isEmpty) return;
 
+    final ids = _selectedTxIds.toList();
+    int alreadyUploadedCount = 0;
+    final List<int> validIdsToUpload = [];
+
+    for (var id in ids) {
+       final tx = _transactions.firstWhere((t) => t['transactionId'] == id, orElse: () => <String, dynamic>{});
+       if (tx.isNotEmpty && tx['syncStatus'] == 'Synced') {
+          alreadyUploadedCount++;
+       } else {
+          validIdsToUpload.add(id);
+       }
+    }
+
+    if (alreadyUploadedCount == ids.length) {
+       UiUtils.showBeautifulSnackBar(context, 'Already upload', isSuccess: false);
+       setState(() {
+          _selectionMode = false;
+          _selectedTxIds.clear();
+       });
+       return;
+    }
+
+    if (alreadyUploadedCount > 0 && ids.length > 1) {
+       final proceed = await showDialog<bool>(
+         context: context,
+         builder: (ctx) => AlertDialog(
+           title: const Text('Upload Summary'),
+           content: Text('Total cards selected: ${ids.length}\nAlready uploaded: $alreadyUploadedCount\nReady to upload: ${validIdsToUpload.length}'),
+           actions: [
+             TextButton(
+               onPressed: () => Navigator.pop(ctx, false),
+               child: const Text('Cancel', style: TextStyle(color: Colors.red)),
+             ),
+             ElevatedButton(
+               onPressed: () => Navigator.pop(ctx, true),
+               style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
+               child: const Text('Proceed', style: TextStyle(color: Colors.white)),
+             ),
+           ],
+         ),
+       );
+
+       if (proceed != true) {
+         setState(() {
+            _selectionMode = false;
+            _selectedTxIds.clear();
+         });
+         return;
+       }
+    }
+
     setState(() {
       _isUploading = true;
       _uploadProgress = 0.0;
@@ -517,12 +506,10 @@ class _OverviewScreenState extends State<OverviewScreen> {
       return;
     }
 
-    final ids = _selectedTxIds.toList();
-
     // Build the `data` array — one entry per selected transaction
     final List<Map<String, dynamic>> dataList = [];
 
-    for (final id in ids) {
+    for (final id in validIdsToUpload) {
       final rows = await AppDatabase.getTransactionWithDetails(id);
       if (rows.isEmpty) continue;
 
@@ -574,25 +561,35 @@ class _OverviewScreenState extends State<OverviewScreen> {
     );
 
     if (syncRes['ok'] == true) {
-      for (final id in ids) {
+      for (final id in validIdsToUpload) {
         await AppDatabase.markTransactionSynced(id);
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Upload success: ${ids.length} transactions')),
-      );
+      
+      final Map<dynamic, dynamic> data = syncRes['data'] ?? {};
+      String msg = 'Upload success: ${validIdsToUpload.length} transactions';
+      if (data.containsKey('message')) {
+         msg = data['message'].toString();
+      } else if (data.containsKey('response')) {
+         msg = data['response'].toString();
+      }
+      
+      if (mounted) {
+         UiUtils.showBeautifulSnackBar(context, msg, isSuccess: true);
+      }
     } else {
-      for (final id in ids) {
+      for (final id in validIdsToUpload) {
         await AppDatabase.markTransactionFailed(id);
       }
       debugPrint('Upload failed: ${syncRes['error']}');
       debugPrint('API response: ${syncRes['response']}');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-              'Upload fail: ${syncRes['error']}\n${syncRes['response'] ?? ''}'),
-          duration: const Duration(seconds: 4),
-        ),
-      );
+      
+      String errorMsg = '${syncRes['error']}';
+      if (syncRes['response'] != null && syncRes['response'].toString().isNotEmpty) {
+          errorMsg += ' - ${syncRes['response']}';
+      }
+      if (mounted) {
+         UiUtils.showBeautifulSnackBar(context, errorMsg, isSuccess: false);
+      }
     }
 
     await _loadTransactions();
@@ -862,6 +859,18 @@ class _OverviewScreenState extends State<OverviewScreen> {
     final tx = _transactions.firstWhere((t) => t['transactionId'] == id,
         orElse: () => {});
     final type = tx['type'] as String? ?? 'Order';
+    final syncStatus = tx['syncStatus'] as String?;
+
+    if (syncStatus == 'Synced') {
+      if (mounted) {
+        UiUtils.showBeautifulSnackBar(context, 'Cannot edit an uploaded $type', isSuccess: false);
+      }
+      setState(() {
+        _selectionMode = false;
+        _selectedTxIds.clear();
+      });
+      return;
+    }
 
     if (type == 'Order') {
       await Navigator.push(
@@ -912,6 +921,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
     final totalAmount = header['TotalAmount'] ?? 0;
     final cashAmount = header['CashAmount'] ?? 0;
     final remarks = header['Remarks'] ?? '';
+    final syncStatus = header['SyncStatus'] as String?;
 
     final lines = <Map<String, dynamic>>[];
     for (final r in rows) {
@@ -1086,9 +1096,10 @@ class _OverviewScreenState extends State<OverviewScreen> {
                         child: const Text('Close'),
                       ),
                       const SizedBox(width: 8),
-                      ElevatedButton.icon(
-                        onPressed: () async {
-                          Navigator.of(ctx).pop();
+                      if (syncStatus != 'Synced')
+                        ElevatedButton.icon(
+                          onPressed: () async {
+                            Navigator.of(ctx).pop();
                           if (type == 'Order') {
                             await Navigator.push(
                               context,
@@ -1239,7 +1250,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
               icon: const Icon(Icons.refresh),
               tooltip: "Refresh Data",
               onPressed: () {
-                _fetchCustomersAndProducts();
+                _fetchCustomersAndProducts(showDialog: true);
               },
             ),
 
@@ -1275,13 +1286,17 @@ class _OverviewScreenState extends State<OverviewScreen> {
                   ),
                 );
 
-                int synced = await ApiService.syncAllTransactions();
+                final result = await ApiService.syncAllTransactions();
 
-                Navigator.pop(context);
+                if (mounted) Navigator.pop(context);
 
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text("$synced transactions synced")),
-                );
+                if (mounted) {
+                  if (result['ok'] == true) {
+                    UiUtils.showBeautifulSnackBar(context, result['message']?.toString() ?? 'Sync successful', isSuccess: true);
+                  } else {
+                    UiUtils.showBeautifulSnackBar(context, result['error']?.toString() ?? 'Sync failed', isSuccess: false);
+                  }
+                }
 
                 _loadTransactions();
               },
@@ -1394,7 +1409,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
               scrollDirection: Axis.horizontal,
               child: Row(
                 children: [
-                  for (final f in ['All', 'Draft', 'Order', 'Cash', 'Return'])
+                  for (final f in ['All', 'Order', 'Cash', 'Return'])
                     Padding(
                       padding: const EdgeInsets.only(right: 8),
                       child: ChoiceChip(
