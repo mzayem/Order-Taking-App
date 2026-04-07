@@ -44,9 +44,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
       final url = "$baseUrl/api/User/login";
 
-      print("BASE URL: $baseUrl");
-      print("LOGIN URL : $url");
-
       final response = await http
           .post(
             Uri.parse(url),
@@ -64,32 +61,38 @@ class _LoginScreenState extends State<LoginScreen> {
       print("STATUS CODE : ${response.statusCode}");
       print("RESPONSE : ${response.body}");
 
-      if (response.statusCode != 200) {
-        _showMessage("Server error : ${response.statusCode}");
-        return;
+      /// ALWAYS try to decode message
+      Map<String, dynamic> data = {};
+
+      try {
+        data = jsonDecode(response.body);
+      } catch (e) {
+        print("JSON decode error: $e");
       }
 
-      final data = jsonDecode(response.body);
-
-      if (data['status'] == 'success') {
-        final prefs = await SharedPreferences.getInstance();
+      /// =========================
+      /// SUCCESS LOGIN
+      /// =========================
+      if (response.statusCode == 200 && data['status'] == 'success') {
         final userId = data['userId'] ?? "";
+
         if (userId.isEmpty) {
           _showMessage("Invalid user ID from server");
           return;
         }
+
         await prefs.setString("userId", userId);
         await prefs.setString("username", data['username'] ?? "");
+
         List towns = data['towns'] ?? [];
 
         List<String> townIds = towns.map((t) => t['id'].toString()).toList();
+
         List<String> townNames =
             towns.map((t) => t['name'].toString()).toList();
+
         await prefs.setStringList("townIds", townIds);
         await prefs.setStringList("townNames", townNames);
-        print("Saved USER ID: $userId");
-        print("Saved USER NAME: $username");
-        print("Saved townIds: $townIds");
 
         if (!mounted) return;
 
@@ -102,32 +105,45 @@ class _LoginScreenState extends State<LoginScreen> {
 
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
+          MaterialPageRoute(
+            builder: (_) => const HomeScreen(),
+          ),
         );
+
+        return;
       }
 
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const HomeScreen()),
+      /// =========================
+      /// SHOW API MESSAGE FIRST
+      /// =========================
+      if (data.containsKey('message') &&
+          data['message'] != null &&
+          data['message'].toString().isNotEmpty) {
+        _showMessage(data['message']);
+        return;
+      }
+
+      /// =========================
+      /// FALLBACK ERROR
+      /// =========================
+      _showMessage(
+        "Server error : ${response.statusCode}",
       );
-    }
-
-    /// Timeout
-    on TimeoutException catch (e) {
+    } on TimeoutException catch (e) {
       print("TIMEOUT ERROR: $e");
-      _showMessage("Connection timeout. Server not responding.");
-    }
-
-    /// Network issue
-    on http.ClientException catch (e) {
+      _showMessage(
+        "Connection timeout. Server not responding.",
+      );
+    } on http.ClientException catch (e) {
       print("CLIENT ERROR: $e");
-      _showMessage("Unable to connect to server.");
-    }
-
-    /// Any other error
-    catch (e) {
+      _showMessage(
+        "Unable to connect to server.",
+      );
+    } catch (e) {
       print("LOGIN ERROR: $e");
-      _showMessage("Unexpected error occurred.");
+      _showMessage(
+        "Unexpected error occurred.",
+      );
     } finally {
       if (mounted) {
         setState(() {

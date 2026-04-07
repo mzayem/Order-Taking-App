@@ -23,7 +23,7 @@ class OrderScreen extends StatefulWidget {
   State<OrderScreen> createState() => _OrderScreenState();
 }
 
-class _OrderScreenState extends State<OrderScreen> {
+class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
   late List<Map<String, dynamic>> customers;
   late List<Map<String, dynamic>> products;
 
@@ -34,7 +34,7 @@ class _OrderScreenState extends State<OrderScreen> {
   final TextEditingController qtyController = TextEditingController();
   final FocusNode _qtyFocusNode = FocusNode();
   List<Map<String, dynamic>> selectedProducts = [];
-
+  static const String _draftKey = "order_draft";
   bool _isLoading = false;
   final bool _isSaving = false;
   bool _isLoadingData = true;
@@ -47,9 +47,121 @@ class _OrderScreenState extends State<OrderScreen> {
   @override
   void initState() {
     super.initState();
+
+    WidgetsBinding.instance.addObserver(this);
+
     customers = widget.customers;
     products = widget.products;
+
     _loadInitialData();
+    _restoreDraft(); // NEW
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      _saveDraft();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  Future<void> _saveDraft() async {
+    if (selectedCustomer == null || selectedProducts.isEmpty) return;
+
+    final prefs = await SharedPreferences.getInstance();
+
+    final draft = {
+      "customer": selectedCustomer,
+      "customerObj": selectedCustomerObj,
+      "products": selectedProducts,
+      "balance": customerBalance,
+    };
+
+    await prefs.setString(
+      _draftKey,
+      jsonEncode(draft),
+    );
+
+    print("DRAFT SAVED");
+  }
+
+  Future<void> _restoreDraft() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    final draftString = prefs.getString(_draftKey);
+
+    if (draftString == null) return;
+
+    final draft = jsonDecode(draftString);
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          title: const Text(
+            "Resume Last Order",
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          content: const Text(
+            "You have an unfinished order.\nDo you want to continue?",
+          ),
+          actions: [
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+              ),
+              onPressed: () async {
+                await prefs.remove(_draftKey);
+
+                Navigator.pop(context);
+              },
+              child: const Text(
+                "Start New",
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green,
+              ),
+              onPressed: () {
+                setState(() {
+                  selectedCustomer = draft["customer"];
+                  selectedCustomerObj =
+                      Map<String, dynamic>.from(draft["customerObj"]);
+
+                  selectedProducts =
+                      List<Map<String, dynamic>>.from(draft["products"]);
+
+                  customerBalance = (draft["balance"] ?? 0).toDouble();
+                });
+
+                Navigator.pop(context);
+
+                print("DRAFT RESTORED");
+              },
+              child: const Text(
+                "Resume",
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Future<void> _loadInitialData() async {
@@ -69,11 +181,13 @@ class _OrderScreenState extends State<OrderScreen> {
     try {
       final db = await AppDatabase.init();
       final rows = await db.query('Customer');
-      final maps = rows.map((r) => {
-            "id": r['CustomerID'],
-            "name": r['Name'],
-            "isNarcoticsAllowed": r['IsNarcoticsAllowed'] == 1,
-          }).toList();
+      final maps = rows
+          .map((r) => {
+                "id": r['CustomerID'],
+                "name": r['Name'],
+                "isNarcoticsAllowed": r['IsNarcoticsAllowed'] == 1,
+              })
+          .toList();
       if (mounted) setState(() => customers = maps);
     } catch (e) {
       debugPrint("DB err: $e");
@@ -88,7 +202,8 @@ class _OrderScreenState extends State<OrderScreen> {
       for (var r in rows) {
         final name = r['Name'] as String;
         final id = r['ProductID'] as int;
-        if (!uniqueProd.containsKey(name) || (uniqueProd[name]!['id'] ?? 0) < id) {
+        if (!uniqueProd.containsKey(name) ||
+            (uniqueProd[name]!['id'] ?? 0) < id) {
           uniqueProd[name] = {
             'id': id,
             'name': name,
@@ -193,7 +308,8 @@ class _OrderScreenState extends State<OrderScreen> {
                         borderRadius: BorderRadius.circular(10)),
                   ),
                   onPressed: () => Navigator.pop(context, false),
-                  child: const Text("No", style: TextStyle(color: Colors.white)),
+                  child:
+                      const Text("No", style: TextStyle(color: Colors.white)),
                 ),
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(
@@ -202,7 +318,8 @@ class _OrderScreenState extends State<OrderScreen> {
                         borderRadius: BorderRadius.circular(10)),
                   ),
                   onPressed: () => Navigator.pop(context, true),
-                  child: const Text("Yes", style: TextStyle(color: Colors.white)),
+                  child:
+                      const Text("Yes", style: TextStyle(color: Colors.white)),
                 ),
               ],
             );
@@ -229,21 +346,35 @@ class _OrderScreenState extends State<OrderScreen> {
 
       final price = selectedProduct!['price'] as int? ?? 0;
 
-      setState(() {
-        selectedProducts.add({
-          "name": selectedProduct!['name'] as String? ?? '',
-          "qty": qty,
-          "price": price,
-          "total": qty * price,
-        });
+      final productName = selectedProduct!['name'];
 
+      final existingIndex = selectedProducts.indexWhere(
+        (p) => p['name'] == productName,
+      );
+
+      setState(() {
+        if (existingIndex != -1) {
+          /// UPDATE EXISTING PRODUCT
+          selectedProducts[existingIndex]['qty'] = qty;
+          selectedProducts[existingIndex]['total'] = qty * price;
+        } else {
+          /// ADD NEW PRODUCT
+          selectedProducts.add({
+            "name": productName,
+            "qty": qty,
+            "price": price,
+            "total": qty * price,
+          });
+        }
+
+        /// Update available quantity
         selectedProduct!['availableQty'] = available - qty;
 
         qtyController.clear();
         selectedProduct = null;
       });
-
       _productFocusNode?.requestFocus();
+      await _saveDraft();
     }
   }
 
@@ -294,6 +425,7 @@ class _OrderScreenState extends State<OrderScreen> {
       );
       return;
     }
+
     if (selectedProducts.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Add at least one product")),
@@ -306,9 +438,14 @@ class _OrderScreenState extends State<OrderScreen> {
         await AppDatabase.insertCustomerIfNotExists(selectedCustomer!);
 
     final details = <Map<String, dynamic>>[];
+
     for (final p in selectedProducts) {
-      final prodId = await AppDatabase.insertProductIfNotExists(p['name'],
-          unitPrice: (p['price'] as num).toDouble(), availableQty: 0);
+      final prodId = await AppDatabase.insertProductIfNotExists(
+        p['name'],
+        unitPrice: (p['price'] as num).toDouble(),
+        availableQty: 0,
+      );
+
       details.add({
         'productId': prodId,
         'qty': p['qty'],
@@ -317,44 +454,72 @@ class _OrderScreenState extends State<OrderScreen> {
     }
 
     if (widget.transactionId != null) {
-      // Editing an existing transaction opened from the overview
+      /// UPDATE EXISTING TRANSACTION
+
       await AppDatabase.updateTransactionAndReplaceDetails(
         transactionId: widget.transactionId!,
         customerId: custId,
         type: type,
         details: details,
       );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text("$type updated (local)")));
-      Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const HomeScreen()), (route) => false);
-      return;
-    } else {
-      // New save — reuse today's pending/failed card if one exists
-      final existingId = await AppDatabase.findTransactionForCustomerOnDate(
-          custId, type, DateTime.now());
 
-      if (existingId != null) {
-        await AppDatabase.updateTransactionAndReplaceDetails(
-          transactionId: existingId,
-          customerId: custId,
-          type: type,
-          details: details,
-        );
-        if (!mounted) return;
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text("$type updated (local)")));
-      } else {
-        final txnId = await AppDatabase.createTransactionWithDetails(
-          customerId: custId,
-          type: type,
-          details: details,
-        );
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("$type saved (local) id: $txnId")));
-      }
+      /// CLEAR DRAFT AFTER SUCCESS
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_draftKey);
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("$type updated (local)")),
+      );
+
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => const HomeScreen()),
+        (route) => false,
+      );
+
+      return;
     }
+
+    /// NEW ORDER
+
+    final existingId = await AppDatabase.findTransactionForCustomerOnDate(
+      custId,
+      type,
+      DateTime.now(),
+    );
+
+    if (existingId != null) {
+      await AppDatabase.updateTransactionAndReplaceDetails(
+        transactionId: existingId,
+        customerId: custId,
+        type: type,
+        details: details,
+      );
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("$type updated (local)")),
+      );
+    } else {
+      final txnId = await AppDatabase.createTransactionWithDetails(
+        customerId: custId,
+        type: type,
+        details: details,
+      );
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("$type saved (local) id: $txnId")),
+      );
+    }
+
+    /// CLEAR DRAFT AFTER SUCCESS
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_draftKey);
 
     if (mounted) {
       setState(() {
@@ -371,36 +536,65 @@ class _OrderScreenState extends State<OrderScreen> {
       context: context,
       builder: (context) {
         return AlertDialog(
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: const Text("Cancel Order",
-              style: TextStyle(fontWeight: FontWeight.bold)),
-          content: const Text("Are you sure you want to cancel this order?"),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          title: const Text(
+            "Cancel Order",
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          content: const Text(
+            "Are you sure you want to cancel this order?",
+          ),
           actions: [
             ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.green,
                 shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10)),
+                  borderRadius: BorderRadius.circular(10),
+                ),
               ),
               onPressed: () => Navigator.pop(context),
-              child: const Text("No", style: TextStyle(color: Colors.white)),
+              child: const Text(
+                "No",
+                style: TextStyle(color: Colors.white),
+              ),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.red,
                 shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10)),
+                  borderRadius: BorderRadius.circular(10),
+                ),
               ),
               onPressed: () {
                 Navigator.pop(context);
-                setState(() {
-                  selectedCustomer = null;
-                  selectedProducts.clear();
-                  qtyController.clear();
-                });
+
+                if (widget.transactionId != null) {
+                  /// Editing → go back to Home
+                  Navigator.pushAndRemoveUntil(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const HomeScreen(),
+                    ),
+                    (route) => false,
+                  );
+                } else {
+                  /// New Order → clear form
+                  setState(() {
+                    selectedCustomer = null;
+                    selectedCustomerObj = null;
+                    selectedProduct = null;
+                    selectedProducts.clear();
+                    qtyController.clear();
+                    customerBalance = 0.0;
+                  });
+                }
               },
-              child: const Text("Yes", style: TextStyle(color: Colors.white)),
+              child: const Text(
+                "Yes",
+                style: TextStyle(color: Colors.white),
+              ),
             ),
           ],
         );
@@ -454,13 +648,42 @@ class _OrderScreenState extends State<OrderScreen> {
                         .toLowerCase()
                         .contains(textEditingValue.text.toLowerCase()));
               },
-              onSelected: (selection) {
+              onSelected: (selection) async {
+                final custId = selection['id'];
+
                 setState(() {
                   selectedCustomer = selection['name']?.toString() ?? '';
                   selectedCustomerObj = selection;
                 });
 
                 _fetchCustomerBalance(selection['id']);
+                await _saveDraft();
+                _productFocusNode?.requestFocus();
+
+                /// NEW: Check if today's order exists
+                final existingId =
+                    await AppDatabase.findTransactionForCustomerOnDate(
+                  custId,
+                  "Order",
+                  DateTime.now(),
+                );
+
+                if (existingId != null) {
+                  await _loadExistingTransaction(existingId);
+
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text("Previous order loaded"),
+                      backgroundColor: Colors.blue,
+                    ),
+                  );
+                } else {
+                  /// No previous order — clear list
+                  setState(() {
+                    selectedProducts.clear();
+                  });
+                }
+
                 _productFocusNode?.requestFocus();
               },
               fieldViewBuilder:
@@ -493,7 +716,25 @@ class _OrderScreenState extends State<OrderScreen> {
                     .contains(textEditingValue.text.toLowerCase()));
               },
               onSelected: (selection) {
-                setState(() => selectedProduct = selection);
+                final productName = selection['name'];
+
+                setState(() {
+                  selectedProduct = selection;
+                });
+
+                /// Check if product already exists in list
+                final existingIndex = selectedProducts.indexWhere(
+                  (p) => p['name'] == productName,
+                );
+
+                if (existingIndex != -1) {
+                  final existingQty = selectedProducts[existingIndex]['qty'];
+
+                  qtyController.text = existingQty.toString();
+                } else {
+                  qtyController.clear();
+                }
+
                 _qtyFocusNode.requestFocus();
               },
               fieldViewBuilder:
@@ -574,8 +815,10 @@ class _OrderScreenState extends State<OrderScreen> {
                             Text("Qty: ${p['qty']}   Price: Rs.${p['price']}"),
                         trailing: IconButton(
                           icon: const Icon(Icons.delete, color: Colors.red),
-                          onPressed: () {
+                          onPressed: () async {
                             setState(() => selectedProducts.removeAt(i));
+
+                            await _saveDraft();
                           },
                         ),
                       ),

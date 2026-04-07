@@ -17,6 +17,8 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'dart:async';
 import 'dart:io';
+import 'package:share_plus/share_plus.dart';
+import 'package:path_provider/path_provider.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -329,13 +331,16 @@ class _OverviewScreenState extends State<OverviewScreen> {
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text("InValid Access", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red)),
-        content: const Text("Your access is invalid. The server configuration has been changed."),
+        title: const Text("InValid Access",
+            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red)),
+        content: const Text(
+            "Your access is invalid. The server configuration has been changed."),
         actions: [
           ElevatedButton(
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.black,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
             ),
             onPressed: () => Navigator.pop(ctx),
             child: const Text("OK", style: TextStyle(color: Colors.white)),
@@ -346,33 +351,6 @@ class _OverviewScreenState extends State<OverviewScreen> {
   }
 
   Future<void> _fetchCustomersAndProducts({bool showDialog = false}) async {
-    final prefs = await SharedPreferences.getInstance();
-    final baseUrl = prefs.getString('baseUrl') ?? '';
-    final savedHeaderRef = prefs.getString('headerRef');
-
-    if (baseUrl.isNotEmpty) {
-      try {
-        final settingRes = await http
-            .get(Uri.parse("$baseUrl/api/Setting"))
-            .timeout(const Duration(seconds: 10));
-        if (settingRes.statusCode == 200) {
-          final settingBody = jsonDecode(settingRes.body);
-          final currentHeaderRef = settingBody['headerRef']?.toString();
-
-          if (savedHeaderRef != null && currentHeaderRef != savedHeaderRef) {
-            if (mounted) {
-              _showInvalidAccessPopup();
-            }
-            return;
-          } else if (savedHeaderRef == null && currentHeaderRef != null) {
-            await prefs.setString('headerRef', currentHeaderRef);
-          }
-        }
-      } catch (e) {
-        debugPrint("HeaderRef sync error: $e");
-      }
-    }
-
     final customerStatus = ValueNotifier<int?>(0);
     final productStatus = ValueNotifier<int?>(0);
     final errorMessage = ValueNotifier<String?>(null);
@@ -532,6 +510,33 @@ class _OverviewScreenState extends State<OverviewScreen> {
   Future<void> _uploadSelected() async {
     if (_selectedTxIds.isEmpty) return;
 
+    final prefs = await SharedPreferences.getInstance();
+    final baseUrl = prefs.getString('baseUrl') ?? '';
+    final savedHeaderRef = prefs.getString('headerRef');
+
+    if (baseUrl.isNotEmpty) {
+      try {
+        final settingRes = await http
+            .get(Uri.parse("$baseUrl/api/Setting"))
+            .timeout(const Duration(seconds: 10));
+        if (settingRes.statusCode == 200) {
+          final settingBody = jsonDecode(settingRes.body);
+          final currentHeaderRef = settingBody['headerRef']?.toString();
+
+          if (savedHeaderRef != null && currentHeaderRef != savedHeaderRef) {
+            if (mounted) {
+              _showInvalidAccessPopup();
+            }
+            return;
+          } else if (savedHeaderRef == null && currentHeaderRef != null) {
+            await prefs.setString('headerRef', currentHeaderRef);
+          }
+        }
+      } catch (e) {
+        debugPrint("HeaderRef sync error: $e");
+      }
+    }
+
     final ids = _selectedTxIds.toList();
     int alreadyUploadedCount = 0;
     final List<int> validIdsToUpload = [];
@@ -592,9 +597,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
       _uploadProgress = 0.0;
     });
 
-    final prefs = await SharedPreferences.getInstance();
     final userId = (prefs.getString('userId') ?? '').trim();
-    final baseUrl = prefs.getString('baseUrl') ?? '';
 
     if (baseUrl.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -707,6 +710,112 @@ class _OverviewScreenState extends State<OverviewScreen> {
       _selectedTxIds.clear();
       _uploadProgress = 0;
     });
+  }
+
+  Future<void> _exportSelected() async {
+    if (_selectedTxIds.isEmpty) return;
+
+    final ids = _selectedTxIds.toList();
+    final List<Map<String, dynamic>> dataList = [];
+
+    for (final id in ids) {
+      final rows = await AppDatabase.getTransactionWithDetails(id);
+      if (rows.isEmpty) continue;
+
+      final header = rows.first;
+      final List<Map<String, dynamic>> details = [];
+      for (final r in rows) {
+        if (r['TransactionDetailID'] != null) {
+          final unitPrice = (r['UnitPrice'] as num?)?.toDouble() ?? 0.0;
+          final qty = (r['Qty'] as num?)?.toInt() ?? 0;
+          details.add({
+            'productId': r['ProductID'],
+            'batchNo': r['BatchNo'] ?? '',
+            'qty': qty,
+            'unitPrice': unitPrice,
+            'totalAmount':
+                (r['TotalPrice'] as num?)?.toDouble() ?? unitPrice * qty,
+          });
+        }
+      }
+
+      int typeValue = 0;
+      if (header['Type'] == 'Cash') {
+        typeValue = 1;
+      } else if (header['Type'] == 'Return') {
+        typeValue = 2;
+      }
+
+      dataList.add({
+        'clientId': id,
+        'date': header['Date'] ?? DateTime.now().toUtc().toIso8601String(),
+        'customerId': header['CustomerID'],
+        'type': typeValue,
+        'remarks': header['Remarks'] ?? '',
+        'totalAmount': (header['TotalAmount'] as num?)?.toDouble() ?? 0.0,
+        'transactionDetails': details,
+      });
+    }
+
+    if (dataList.isEmpty) return;
+
+    final StringBuffer csvData = StringBuffer();
+    csvData.writeln(
+        "clientId,date,customerId,type,remarks,totalAmount,productId,batchNo,qty,unitPrice,detailTotalAmount");
+
+    for (final data in dataList) {
+      final clientId = data['clientId'];
+      final date = data['date'];
+      final customerId = data['customerId'];
+      final type = data['type'];
+      final remarks =
+          data['remarks'].toString().replaceAll(',', ' ').replaceAll('\n', ' ');
+      final totalAmount = data['totalAmount'];
+
+      final details = data['transactionDetails'] as List;
+      if (details.isEmpty) {
+        csvData.writeln(
+            "$clientId,$date,$customerId,$type,$remarks,$totalAmount,,,,,");
+      } else {
+        for (final detail in details) {
+          final productId = detail['productId'];
+          final batchNo = detail['batchNo']
+              .toString()
+              .replaceAll(',', ' ')
+              .replaceAll('\n', ' ');
+          final qty = detail['qty'];
+          final unitPrice = detail['unitPrice'];
+          final detailTotalAmount = detail['totalAmount'];
+          csvData.writeln(
+              "$clientId,$date,$customerId,$type,$remarks,$totalAmount,$productId,$batchNo,$qty,$unitPrice,$detailTotalAmount");
+        }
+      }
+    }
+
+    try {
+      final directory = await getTemporaryDirectory();
+      final String fileName =
+          "Exported_Transactions_${DateTime.now().millisecondsSinceEpoch}.csv";
+      final String path = "${directory.path}/$fileName";
+      final File file = File(path);
+      await file.writeAsString(csvData.toString());
+
+      if (mounted) {
+        await Share.shareXFiles(
+          [XFile(path)],
+          text: 'Transactions CSV Export',
+        );
+        setState(() {
+          _selectionMode = false;
+          _selectedTxIds.clear();
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        UiUtils.showBeautifulSnackBar(context, "Export failed: $e",
+            isSuccess: false);
+      }
+    }
   }
 
   void _toggleSelection(int txnId) {
@@ -1481,6 +1590,14 @@ class _OverviewScreenState extends State<OverviewScreen> {
               },
             ),
 
+          /// Export Button (only if something is selected)
+          if (_selectionMode && _selectedTxIds.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.download),
+              tooltip: 'Export selected',
+              onPressed: _exportSelected,
+            ),
+
           /// Delete Button (only if something is selected)
           if (_selectionMode && _selectedTxIds.isNotEmpty)
             IconButton(
@@ -1602,7 +1719,9 @@ class _OverviewScreenState extends State<OverviewScreen> {
               ),
               Column(children: [
                 ElevatedButton(
-                    onPressed: () {},
+                    onPressed: () {
+                      _exportSelected();
+                    },
                     style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.green,
                         shape: RoundedRectangleBorder(
