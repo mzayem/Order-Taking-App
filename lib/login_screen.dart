@@ -172,15 +172,21 @@ class _LoginScreenState extends State<LoginScreen> {
     return Scaffold(
       appBar: AppBar(
         elevation: 0,
-        leading: IconButton(
-          icon: Icon(Icons.arrow_back, color: AppColors.textPrimary),
-          onPressed: () {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(builder: (_) => const UrlSetupScreen()),
-            );
-          },
-        ),
+        automaticallyImplyLeading: false,
+        actions: [
+          IconButton(
+            tooltip: 'Change API URL',
+            icon: Icon(Icons.settings_ethernet_rounded,
+                color: AppColors.textPrimary),
+            onPressed: () {
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(builder: (_) => const UrlSetupScreen()),
+              );
+            },
+          ),
+          const SizedBox(width: 4),
+        ],
       ),
       body: SafeArea(
         child: Center(

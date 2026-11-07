@@ -238,7 +238,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       onPressed:
                           _busy || counting || _total == 0 ? null : _exportOnly,
                       icon: const Icon(Icons.ios_share, size: 18),
-                      label: const Text('Export'),
+                      label: const Text('Export', maxLines: 1),
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -249,7 +249,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ? null
                           : _exportAndClear,
                       icon: const Icon(Icons.delete_sweep_outlined, size: 18),
-                      label: const Text('Export & clear'),
+                      label: const FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text('Export & clear', maxLines: 1, softWrap: false),
+                      ),
                     ),
                   ),
                 ],

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Release builds strip resources referenced only by name; the notification
+     plugin looks the icon up by name, so keep it or startup fails. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_stat_notify,@mipmap/launcher_icon"
+    tools:shrinkMode="safe" />

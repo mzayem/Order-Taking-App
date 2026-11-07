@@ -15,15 +15,24 @@ final navigatorKey = GlobalKey<NavigatorState>();
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // await AppDatabase.deleteDatabaseFile();
-  await AppDatabase.init(); // initialize DB
+  // The DB also opens lazily on first use, so a failure here must not stop
+  // the app from reaching the first screen.
+  try {
+    await AppDatabase.init();
+  } catch (_) {}
   // Downloads/softifex-orders: created on first launch, re-created if deleted
   // (ensureFolder runs again before every export too).
   try {
     await TransactionExport.ensureFolder();
   } catch (_) {}
-  await LocalNotifier.init(); // phone notifications (asks permission once)
-  await ThemeController.instance
-      .init(); // light / dark / system, before first frame
+  // Phone notifications (asks permission once). Never block startup on it.
+  try {
+    await LocalNotifier.init();
+  } catch (_) {}
+  try {
+    await ThemeController.instance
+        .init(); // light / dark / system, before first frame
+  } catch (_) {}
   runApp(const MyApp());
 }
 

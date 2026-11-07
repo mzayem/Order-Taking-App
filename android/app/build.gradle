@@ -50,6 +50,12 @@ android {
             // Signed with the release key from android/key.properties; without
             // that file it falls back to the debug key (local test builds only).
             signingConfig = keystoreFile.exists() ? signingConfigs.release : signingConfigs.debug
+
+            // R8 / resource shrinking strip things plugins look up by name
+            // (notification icon, SQLite, reflection) and made the release
+            // app hang before the splash. The size saving is not worth it.
+            minifyEnabled false
+            shrinkResources false
         }
     }
 }

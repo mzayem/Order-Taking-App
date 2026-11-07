@@ -49,7 +49,12 @@ class _UrlSetupScreenState extends State<UrlSetupScreen> {
     final typedScheme = url.startsWith("http://") || url.startsWith("https://");
     if (!typedScheme) url = "https://$url";
 
-    var cleanUrl = url.replaceAll(RegExp(r'/+$'), '');
+    // Tolerate a trailing slash (or several) and a pasted "/api" suffix.
+    var cleanUrl = url
+        .replaceAll(RegExp(r'\s+'), '')
+        .replaceAll(RegExp(r'/+$'), '')
+        .replaceAll(RegExp(r'/api$', caseSensitive: false), '')
+        .replaceAll(RegExp(r'/+$'), '');
 
     setState(() => isLoading = true);
 

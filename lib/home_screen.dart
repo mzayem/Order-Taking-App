@@ -151,24 +151,24 @@ class _HomeScreenState extends State<HomeScreen> {
             onTap: _onItemTapped,
             items: const [
               NavItem(
-                  icon: Icons.home_outlined,
-                  activeIcon: Icons.home_rounded,
+                  icon: Icons.space_dashboard_outlined,
+                  activeIcon: Icons.space_dashboard_rounded,
                   label: "Home"),
               NavItem(
-                  icon: Icons.shopping_cart_outlined,
-                  activeIcon: Icons.shopping_cart_rounded,
+                  icon: Icons.receipt_long_outlined,
+                  activeIcon: Icons.receipt_long_rounded,
                   label: "Order"),
               NavItem(
-                  icon: Icons.payments_outlined,
-                  activeIcon: Icons.payments_rounded,
+                  icon: Icons.account_balance_wallet_outlined,
+                  activeIcon: Icons.account_balance_wallet_rounded,
                   label: "Cash"),
               NavItem(
-                  icon: Icons.assignment_return_outlined,
-                  activeIcon: Icons.assignment_return_rounded,
+                  icon: Icons.keyboard_return_rounded,
+                  activeIcon: Icons.keyboard_return_rounded,
                   label: "Return"),
               NavItem(
-                  icon: Icons.person_outline,
-                  activeIcon: Icons.person_rounded,
+                  icon: Icons.account_circle_outlined,
+                  activeIcon: Icons.account_circle_rounded,
                   label: "Profile"),
             ],
           ),
@@ -1587,8 +1587,9 @@ class _OverviewScreenState extends State<OverviewScreen>
             )
           : (showUploadFab
               ? FloatingActionButton.extended(
-                  backgroundColor: AppColors.green,
-                  icon: Icon(Icons.cloud_upload, color: AppColors.onBrand),
+                  backgroundColor: AppColors.brand,
+                  foregroundColor: AppColors.onBrand,
+                  icon: Icon(Icons.cloud_upload_rounded, color: AppColors.onBrand),
                   label: const Text("Upload"),
                   onPressed: _uploadSelected,
                 )
