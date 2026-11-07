@@ -682,6 +682,50 @@ class AppDatabase {
         orderBy: 'Date ASC');
   }
 
+  /// Money per day and type for the last [days] days ending today, for the
+  /// Insights screen. Keys are yyyy-MM-dd; values are {Order, Cash, Return}
+  /// sums (Cash counts CashAmount, the others TotalAmount, like Home does).
+  static Future<Map<String, Map<String, double>>> getDailyTotals(
+      int days) async {
+    final db = await init();
+    final today = DateTime.now();
+    final start = DateTime(today.year, today.month, today.day)
+        .subtract(Duration(days: days - 1));
+    final rows = await db.rawQuery('''
+      SELECT date(Date) AS d, Type,
+             SUM(CASE WHEN Type = 'Cash' THEN IFNULL(CashAmount, 0)
+                      ELSE IFNULL(TotalAmount, 0) END) AS amt
+      FROM "Transaction"
+      WHERE Date >= ? AND $_ownerFilter
+      GROUP BY d, Type
+    ''', [start.toIso8601String(), await currentUserId()]);
+    final out = <String, Map<String, double>>{};
+    for (final r in rows) {
+      final d = r['d'] as String?;
+      final t = r['Type'] as String?;
+      if (d == null || t == null) continue;
+      (out[d] ??= {})[t] = (r['amt'] as num?)?.toDouble() ?? 0;
+    }
+    return out;
+  }
+
+  /// Best customers by order value over the last [days] days.
+  static Future<List<Map<String, dynamic>>> getTopCustomers(int days,
+      {int limit = 5}) async {
+    final db = await init();
+    final today = DateTime.now();
+    final start = DateTime(today.year, today.month, today.day)
+        .subtract(Duration(days: days - 1));
+    return db.rawQuery('''
+      SELECT c.Name AS name, SUM(IFNULL(t.TotalAmount, 0)) AS amt, COUNT(*) AS n
+      FROM "Transaction" t JOIN Customer c ON c.CustomerID = t.CustomerID
+      WHERE t.Type = 'Order' AND t.Date >= ? AND (t.UserID = ? OR t.UserID IS NULL)
+      GROUP BY t.CustomerID
+      ORDER BY amt DESC
+      LIMIT ?
+    ''', [start.toIso8601String(), await currentUserId(), limit]);
+  }
+
   /// Deletes several transactions (and their details) in one DB transaction.
   static Future<void> deleteTransactions(List<int> ids) async {
     if (ids.isEmpty) return;

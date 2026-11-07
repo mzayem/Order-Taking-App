@@ -241,7 +241,7 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
     });
 
     try {
-      final response = await http.post(
+      final response = await ApiService.post(
         Uri.parse('$baseUrl/api/Customer/balanceFetch'),
         headers: await ApiService.headers(),
         body: jsonEncode({

@@ -92,7 +92,7 @@ class _CashScreenState extends State<CashScreen> {
     });
 
     try {
-      final response = await http.post(
+      final response = await ApiService.post(
         Uri.parse('$baseUrl/api/Customer/balanceFetch'),
         headers: await ApiService.headers(),
         body: jsonEncode({

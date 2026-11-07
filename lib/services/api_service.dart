@@ -63,6 +63,13 @@ class ApiService {
   /// -----------------------------
   /// AUTH HEADERS (token from login)
   /// -----------------------------
+  /// Every request gets a deadline, so a dead connection never hangs a screen.
+  static const requestTimeout = Duration(seconds: 20);
+
+  static Future<http.Response> post(Uri url,
+          {Map<String, String>? headers, Object? body}) =>
+      http.post(url, headers: headers, body: body).timeout(requestTimeout);
+
   static Future<Map<String, String>> headers() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('token') ?? '';
@@ -125,7 +132,7 @@ class ApiService {
       final url = Uri.parse('$baseUrl/api/Customer/customerFetch');
 
       final etagKey = 'etag_customers_$userId'; // towns differ per user
-      final response = await http.post(
+      final response = await ApiService.post(
         url,
         headers: await _withETag(etagKey, 'Customer'),
         body: jsonEncode({
@@ -201,7 +208,7 @@ class ApiService {
       final url = Uri.parse('$baseUrl/api/Products/getProduct');
 
       const etagKey = 'etag_products';
-      final response = await http.post(
+      final response = await ApiService.post(
         url,
         headers: await _withETag(etagKey, 'Product'),
         body: jsonEncode({
@@ -311,7 +318,7 @@ class ApiService {
       final baseUrl = prefs.getString('baseUrl') ?? '';
       if (baseUrl.isEmpty) return null;
 
-      final response = await http.post(
+      final response = await ApiService.post(
         Uri.parse('$baseUrl/api/VendorGroup/getVendorGroups'),
         headers: await headers(),
         body: jsonEncode({'userId': prefs.getString('userId') ?? ''}),
@@ -379,7 +386,7 @@ class ApiService {
       final baseUrl = prefs.getString('baseUrl') ?? '';
       if (baseUrl.isEmpty) return;
 
-      final response = await http.post(
+      final response = await ApiService.post(
         Uri.parse('$baseUrl/api/Notification/markRead'),
         headers: await headers(),
         body: jsonEncode({
@@ -424,7 +431,7 @@ class ApiService {
 
     final http.Response response;
     try {
-      response = await http.post(
+      response = await ApiService.post(
         Uri.parse('$baseUrl/api/Transaction/createTransaction'),
         headers: await headers(),
         body: jsonEncode({'userId': userId, 'data': dataList}),
@@ -561,7 +568,7 @@ class ApiService {
 
       debugPrint('checkBatch REQUEST: ${jsonEncode(body)}');
 
-      final response = await http.post(
+      final response = await ApiService.post(
         url,
         headers: await headers(),
         body: jsonEncode(body),

@@ -44,19 +44,29 @@ class _UrlSetupScreenState extends State<UrlSetupScreen> {
     final prefs = await SharedPreferences.getInstance();
 
     /// 🔹 ADD http automatically if user didn't type it
-    if (!url.startsWith("http://") && !url.startsWith("https://")) {
-      url = "http://$url";
-    }
+    // A bare address is tried over secure https first; plain http is only the
+    // fallback for servers that do not have a certificate yet.
+    final typedScheme = url.startsWith("http://") || url.startsWith("https://");
+    if (!typedScheme) url = "https://$url";
 
-    final cleanUrl = url.replaceAll(RegExp(r'/+$'), '');
+    var cleanUrl = url.replaceAll(RegExp(r'/+$'), '');
 
     setState(() => isLoading = true);
 
     try {
       /// 🔹 STEP 1: GET SETTINGS
-      final settingRes = await http
-          .get(Uri.parse("$cleanUrl/api/Setting"))
-          .timeout(const Duration(seconds: 10));
+      http.Response settingRes;
+      try {
+        settingRes = await http
+            .get(Uri.parse("$cleanUrl/api/Setting"))
+            .timeout(const Duration(seconds: 10));
+      } catch (_) {
+        if (typedScheme) rethrow;
+        cleanUrl = cleanUrl.replaceFirst("https://", "http://");
+        settingRes = await http
+            .get(Uri.parse("$cleanUrl/api/Setting"))
+            .timeout(const Duration(seconds: 10));
+      }
 
       print("TEST STATUS: ${settingRes.statusCode}");
       print("TEST BODY: ${settingRes.body}");
@@ -82,7 +92,9 @@ class _UrlSetupScreenState extends State<UrlSetupScreen> {
       final licenseUrl = "https://softifex-admin.techstersol.com/api/license"
           "?machineIP=$cleanUrl&id=$settingsId&name=$companyName";
 
-      final licenseRes = await http.get(Uri.parse(licenseUrl));
+      final licenseRes = await http
+          .get(Uri.parse(licenseUrl))
+          .timeout(const Duration(seconds: 15));
 
       if (licenseRes.statusCode != 200) {
         _showMessage("License verification failed");

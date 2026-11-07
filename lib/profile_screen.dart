@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:dmc/widgets/app_toast.dart';
 import 'package:dmc/about_screen.dart';
 import 'package:dmc/activity_screen.dart';
+import 'package:dmc/insights_screen.dart';
 import 'package:dmc/services/app_log.dart';
 import 'package:dmc/settings_screen.dart';
 import 'package:dmc/theme/app_theme.dart';
@@ -194,6 +195,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     clipBehavior: Clip.antiAlias,
                     child: Column(
                       children: [
+                        ListTile(
+                          leading: Icon(Icons.insights_rounded,
+                              color: AppColors.accent),
+                          title: const Text("Insights"),
+                          subtitle:
+                              const Text("Today vs yesterday, last 7 days"),
+                          trailing: Icon(Icons.chevron_right,
+                              color: AppColors.textTertiary),
+                          onTap: () => _open(const InsightsScreen()),
+                        ),
+                        const Divider(height: 1, indent: 56),
                         ListTile(
                           leading: Icon(Icons.history, color: AppColors.blue),
                           title: const Text("Activity"),

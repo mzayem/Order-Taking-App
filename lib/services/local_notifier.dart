@@ -20,7 +20,7 @@ class LocalNotifier {
 
   static Future<void> init() async {
     await _plugin.initialize(const InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      android: AndroidInitializationSettings('@drawable/ic_stat_notify'),
       iOS: DarwinInitializationSettings(),
     ));
     // Android 13+ asks the user once.

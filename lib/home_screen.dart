@@ -122,49 +122,57 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     // The bar floats over the page background (not over content), so tab
     // screens keep their own bottom layout untouched.
-    return Scaffold(
-      // Tabs cross-fade with a slight zoom (220 ms); off with reduce motion.
-      body: AnimatedSwitcher(
-        duration: MediaQuery.of(context).disableAnimations
-            ? Duration.zero
-            : const Duration(milliseconds: 220),
-        switchInCurve: Curves.easeOutCubic,
-        switchOutCurve: Curves.easeInCubic,
-        transitionBuilder: (child, a) => FadeTransition(
-          opacity: a,
-          child: ScaleTransition(
-              scale: Tween(begin: 0.985, end: 1.0).animate(a), child: child),
-        ),
-        child: KeyedSubtree(
-            key: ValueKey(_selectedIndex), child: _screens[_selectedIndex]),
-      ),
-      bottomNavigationBar: FloatingNavBar(
-        currentIndex: _selectedIndex,
-        onTap: _onItemTapped,
-        items: const [
-          NavItem(
-              icon: Icons.home_outlined,
-              activeIcon: Icons.home_rounded,
-              label: "Home"),
-          NavItem(
-              icon: Icons.shopping_cart_outlined,
-              activeIcon: Icons.shopping_cart_rounded,
-              label: "Order"),
-          NavItem(
-              icon: Icons.payments_outlined,
-              activeIcon: Icons.payments_rounded,
-              label: "Cash"),
-          NavItem(
-              icon: Icons.assignment_return_outlined,
-              activeIcon: Icons.assignment_return_rounded,
-              label: "Return"),
-          NavItem(
-              icon: Icons.person_outline,
-              activeIcon: Icons.person_rounded,
-              label: "Profile"),
-        ],
-      ),
-    );
+    // Back from Order / Cash / Return / Profile goes to Home first; Back on
+    // Home leaves the app.
+    return PopScope(
+        canPop: _selectedIndex == 0,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) setState(() => _selectedIndex = 0);
+        },
+        child: Scaffold(
+          // Tabs cross-fade with a slight zoom (220 ms); off with reduce motion.
+          body: AnimatedSwitcher(
+            duration: MediaQuery.of(context).disableAnimations
+                ? Duration.zero
+                : const Duration(milliseconds: 220),
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
+            transitionBuilder: (child, a) => FadeTransition(
+              opacity: a,
+              child: ScaleTransition(
+                  scale: Tween(begin: 0.985, end: 1.0).animate(a),
+                  child: child),
+            ),
+            child: KeyedSubtree(
+                key: ValueKey(_selectedIndex), child: _screens[_selectedIndex]),
+          ),
+          bottomNavigationBar: FloatingNavBar(
+            currentIndex: _selectedIndex,
+            onTap: _onItemTapped,
+            items: const [
+              NavItem(
+                  icon: Icons.home_outlined,
+                  activeIcon: Icons.home_rounded,
+                  label: "Home"),
+              NavItem(
+                  icon: Icons.shopping_cart_outlined,
+                  activeIcon: Icons.shopping_cart_rounded,
+                  label: "Order"),
+              NavItem(
+                  icon: Icons.payments_outlined,
+                  activeIcon: Icons.payments_rounded,
+                  label: "Cash"),
+              NavItem(
+                  icon: Icons.assignment_return_outlined,
+                  activeIcon: Icons.assignment_return_rounded,
+                  label: "Return"),
+              NavItem(
+                  icon: Icons.person_outline,
+                  activeIcon: Icons.person_rounded,
+                  label: "Profile"),
+            ],
+          ),
+        ));
   }
 }
 
@@ -185,6 +193,7 @@ class _OverviewScreenState extends State<OverviewScreen>
   DateTime _selectedDate = DateTime.now();
   bool _isInit = true;
   bool _isOnline = true;
+  bool _paused = false;
   Timer? _connectivityTimer;
   int _unreadNotifications = 0;
   DateTime? _lastNotificationCheck;
@@ -209,14 +218,16 @@ class _OverviewScreenState extends State<OverviewScreen>
     _loadTransactions();
     _checkConnectivity();
     _connectivityTimer = Timer.periodic(
-        const Duration(seconds: 10), (_) => _checkConnectivity());
+        const Duration(seconds: 45), (_) => _checkConnectivity());
     WidgetsBinding.instance.addObserver(this);
     _checkNotifications(force: true);
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _paused = state != AppLifecycleState.resumed;
     if (state == AppLifecycleState.resumed) {
+      _checkConnectivity();
       _checkNotifications();
       _refreshIfNewDay(); // app left open overnight
     }
@@ -248,13 +259,19 @@ class _OverviewScreenState extends State<OverviewScreen>
   }
 
   Future<void> _checkConnectivity() async {
+    // Only while the app is on screen, and only a DNS lookup of OUR server
+    // (not google.com): cheap on battery and data.
+    if (_paused) return;
     bool online = false;
     try {
-      final result = await InternetAddress.lookup('google.com');
-      if (result.isNotEmpty && result[0].rawAddress.isNotEmpty) {
-        online = true;
+      final prefs = await SharedPreferences.getInstance();
+      final host = Uri.tryParse(prefs.getString('baseUrl') ?? '')?.host ?? '';
+      if (host.isNotEmpty) {
+        final r = await InternetAddress.lookup(host)
+            .timeout(const Duration(seconds: 4));
+        online = r.isNotEmpty && r[0].rawAddress.isNotEmpty;
       }
-    } on SocketException catch (_) {
+    } catch (_) {
       online = false;
     }
     if (mounted && _isOnline != online) {

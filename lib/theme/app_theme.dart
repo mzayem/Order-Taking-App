@@ -56,16 +56,16 @@ const _light = _Palette(
   brand: Color(0xFF1F4E79), // --erp-primary
   brandDark: Color(0xFF173C5F), // --erp-primary-hover
   brandSoft: Color(0xFFE3EAF3), // --erp-primary-soft on white
-  accent: Color(0xFF3F7FB8), // --erp-accent
+  accent: Color(0xFF2F6AA0), // --erp-accent
   onBrand: Color(0xFFFFFFFF),
-  green: Color(0xFF1E9E6A), // --erp-good
-  orange: Color(0xFFD98E04), // --erp-warn
-  red: Color(0xFFD1495B), // --erp-bad
+  green: Color(0xFF107549), // --erp-good
+  orange: Color(0xFF8F5E00), // --erp-warn
+  red: Color(0xFFB5303F), // --erp-bad
   greenSoft: Color(0xFFE4F3ED),
   orangeSoft: Color(0xFFFBF1E0),
   redSoft: Color(0xFFFAE9EB),
   redLine: Color(0x4DD1495B),
-  solidGood: Color(0xFF1A8F5F), // --erp-solid-good
+  solidGood: Color(0xFF15805A), // --erp-solid-good
   solidBad: Color(0xFFC93C4F), // --erp-solid-bad
   heroStart: Color(0xFF0F2742), // --erp-side-bg
   heroEnd: Color(0xFF2A6AA8), // towards --erp-accent
@@ -80,8 +80,8 @@ const _light = _Palette(
   surfaceMuted: Color(0xFFF5F8FC), // --erp-soft
   inputFill: Color(0xFFFFFFFF),
   textPrimary: Color(0xFF1C2B3A), // --erp-text
-  textSecondary: Color(0xFF6B7A8C), // --erp-muted
-  textTertiary: Color(0xFF9AA6B4),
+  textSecondary: Color(0xFF566577), // --erp-muted
+  textTertiary: Color(0xFF5F6E80),
   hairline: Color(0xFFDCE3EC), // --erp-border
   glassFill: Color(0xCCFFFFFF), // white 80% over the sky
   glassEdge: Color(0xE6FFFFFF), // bright rim, like iOS glass
@@ -104,8 +104,8 @@ const _dark = _Palette(
   orangeSoft: Color(0xFF33311F),
   redSoft: Color(0xFF3A2433),
   redLine: Color(0x66EF6B7C),
-  solidGood: Color(0xFF1F9D68),
-  solidBad: Color(0xFFD34A5D),
+  solidGood: Color(0xFF15805A),
+  solidBad: Color(0xFFC5384C),
   heroStart: Color(0xFF0B2447),
   heroEnd: Color(0xFF1D5799),
   heroMuted: Color(0xFFB9C6D6),
@@ -120,7 +120,7 @@ const _dark = _Palette(
   inputFill: Color(0xFF0E1E33),
   textPrimary: Color(0xFFE8EEF5),
   textSecondary: Color(0xFF93A4B9),
-  textTertiary: Color(0xFF61748C),
+  textTertiary: Color(0xFF7A8CA5),
   hairline: Color(0xFF213654),
   glassFill: Color(0xB3112440), // navy 70% over the glow
   glassEdge: Color(0x24FFFFFF), // white 14% rim

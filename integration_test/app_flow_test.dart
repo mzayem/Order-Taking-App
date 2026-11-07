@@ -521,6 +521,35 @@ void main() {
       expect(t.takeException(), isNull);
     });
 
+    testWidgets('Insights: compares with yesterday and shows 7 days', (t) async {
+      final db = await seed();
+      final now = DateTime.now();
+      await insertTx(db, customerId: 1, type: 'Order', date: now, total: 500);
+      await insertTx(db,
+          customerId: 1,
+          type: 'Order',
+          date: now.subtract(const Duration(days: 1)));
+      await launch(t);
+      await tapNav(t, 'Profile');
+      await tapScrolling(t, find.text('Insights'));
+      await waitFor(t, find.text('Last 7 days'), reason: 'insights loaded');
+      expect(find.text('Orders'), findsWidgets);
+      expect(find.textContaining('vs yesterday'), findsWidgets);
+      expect(find.textContaining('Top customers'), findsOneWidget);
+      expect(t.takeException(), isNull);
+    });
+
+    testWidgets('Back on a tab goes to Home first', (t) async {
+      await seed();
+      await launch(t);
+      await tapNav(t, 'Cash');
+      expect(find.text('Cash payment'), findsWidgets);
+      await t.binding.handlePopRoute();
+      await settle(t);
+      expect(find.text('Overview'), findsWidgets);
+      expect(t.takeException(), isNull);
+    });
+
     testWidgets('About: shows your developer details, hides empty fields',
         (t) async {
       await seed();
