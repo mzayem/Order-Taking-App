@@ -166,33 +166,6 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  // Future<void> loginUser() async {
-  //   final url = Uri.parse('http://app.dmcgroup.pk:2004/api/User/login');
-
-  //   try {
-  //     final response = await http.post(
-  //       url,
-  //       headers: {
-  //         'accept': '*/*',
-  //         'Content-Type': 'application/json',
-  //       },
-  //       body: jsonEncode({"username": "aliraza", "password": "Chmzayem789@"}),
-  //     );
-
-  //     // Log status code
-  //     print("Status Code: ${response.statusCode}");
-
-  //     // Log raw response
-  //     print("Response Body: ${response.body}");
-
-  //     // If JSON response
-  //     final data = jsonDecode(response.body);
-  //     print("Decoded Response: $data");
-  //   } catch (e) {
-  //     print("API Error: $e");
-  //   }
-  // }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(

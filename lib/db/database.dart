@@ -12,7 +12,7 @@ class AppDatabase {
 
     _db = await openDatabase(
       path,
-      version: 3,
+      version: 4,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON;');
       },
@@ -34,11 +34,12 @@ class AppDatabase {
         // ================= CUSTOMER =================
         await db.execute('''
         CREATE TABLE Customer(
-          CustomerID INTEGER PRIMARY KEY,
-          Name TEXT NOT NULL,
-          Town TEXT,
-          IsNarcotics INTEGER DEFAULT 0
-        )
+  CustomerID INTEGER PRIMARY KEY,
+  Name TEXT NOT NULL,
+  Address TEXT,
+  Town TEXT,
+  IsNarcotics INTEGER DEFAULT 0
+)
         ''');
 
         // ================= USER =================
@@ -107,13 +108,24 @@ class AppDatabase {
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 3) {
-          // Add ProductType column if missing
           try {
-            await db
-                .execute('ALTER TABLE Product ADD COLUMN ProductType TEXT;');
-          } catch (e) {
-            print("ProductType column already exists or upgrade skipped: $e");
-          }
+            await db.execute('ALTER TABLE Product ADD COLUMN ProductType TEXT');
+          } catch (_) {}
+        }
+
+        if (oldVersion < 4) {
+          try {
+            await db.execute('ALTER TABLE Customer ADD COLUMN Address TEXT');
+          } catch (_) {}
+
+          try {
+            await db.execute('ALTER TABLE Customer ADD COLUMN Town TEXT');
+          } catch (_) {}
+
+          try {
+            await db.execute(
+                'ALTER TABLE Customer ADD COLUMN IsNarcotics INTEGER DEFAULT 0');
+          } catch (_) {}
         }
       },
     );
@@ -128,20 +140,22 @@ class AppDatabase {
     int count = await db.update(
       'Customer',
       {
-        'Name': customer['Name'],
-        'Town': customer['Town'] ?? '',
-        'IsNarcotics': customer['IsNarcotics'] ?? 0,
+        'Name': customer['customerName'],
+        'Address': customer['address'] ?? '',
+        'Town': customer['townID']?.toString() ?? '',
+        'IsNarcotics': customer['isNarcoticsAllowed'] == true ? 1 : 0,
       },
       where: 'CustomerID=?',
-      whereArgs: [customer['CustomerID']],
+      whereArgs: [customer['customerId']],
     );
 
     if (count == 0) {
       await db.insert('Customer', {
-        'CustomerID': customer['CustomerID'],
-        'Name': customer['Name'],
-        'Town': customer['Town'] ?? '',
-        'IsNarcotics': customer['IsNarcotics'] ?? 0,
+        'CustomerID': customer['customerId'],
+        'Name': customer['customerName'],
+        'Address': customer['address'] ?? '',
+        'Town': customer['townID']?.toString() ?? '',
+        'IsNarcotics': customer['isNarcoticsAllowed'] == true ? 1 : 0,
       });
     }
   }

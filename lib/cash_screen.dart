@@ -53,20 +53,17 @@ class _CashScreenState extends State<CashScreen> {
     final db = await AppDatabase.init();
     final custRows = await db.query('Customer');
 
-    final Map<String, Map<String, dynamic>> uniqueCustomers = {};
-    for (var r in custRows) {
-      final name = r['Name'] as String;
-      final id = r['CustomerID'] as int;
-      if (!uniqueCustomers.containsKey(name) ||
-          id > (uniqueCustomers[name]!['id'] as int)) {
-        uniqueCustomers[name] = {"id": id, "name": name};
-      }
-    }
+    final customers = custRows.map((r) {
+      return {
+        "id": r['CustomerID'],
+        "name": r['Name'],
+        "address": r['Address'] ?? '',
+      };
+    }).toList();
 
     if (mounted) {
       setState(() {
-        _customersMap = uniqueCustomers.values.toList();
-        _customers = _customersMap.map((c) => c['name'] as String).toList();
+        _customersMap = customers;
       });
     }
   }
@@ -180,7 +177,10 @@ class _CashScreenState extends State<CashScreen> {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Cash updated (local)')));
-        Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const HomeScreen()), (route) => false);
+        Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (_) => const HomeScreen()),
+            (route) => false);
         return;
       } else {
         final existingId = await AppDatabase.findTransactionForCustomerOnDate(
@@ -264,106 +264,220 @@ class _CashScreenState extends State<CashScreen> {
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(18.0),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            children: [
-              const SizedBox(height: 20),
-              const Align(
-                alignment: Alignment.centerLeft,
-                child: Text("Select Customer",
-                    style:
-                        TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-              ),
-              const SizedBox(height: 10),
-              Autocomplete<String>(
-                optionsBuilder: (TextEditingValue textEditingValue) {
-                  if (textEditingValue.text.isEmpty) {
-                    return const Iterable<String>.empty();
-                  }
-                  return _customers.where((String option) {
-                    return option
-                        .toLowerCase()
-                        .contains(textEditingValue.text.toLowerCase());
-                  });
-                },
-                onSelected: (String selection) {
-                  setState(() => _selectedCustomer = selection);
-                  final found = _customersMap.firstWhere(
-                      (c) => c['name'] == selection,
-                      orElse: () => <String, dynamic>{});
-                  if (found.isNotEmpty) {
-                    _fetchCustomerBalance(found['id'] as int);
-                  }
-                  _amountFocusNode.requestFocus();
-                },
-                fieldViewBuilder:
-                    (context, controller, focusNode, onEditingComplete) {
-                  controller.text = _selectedCustomer ?? '';
-                  return TextField(
-                    controller: controller,
-                    focusNode: focusNode,
-                    onEditingComplete: onEditingComplete,
-                    decoration: inputDecoration("Select Customer"),
-                  );
-                },
-              ),
-              const SizedBox(height: 10),
-              TextFormField(
-                controller: _amountController,
-                focusNode: _amountFocusNode,
-                textInputAction: TextInputAction.done,
-                keyboardType: TextInputType.number,
-                decoration: inputDecoration("Enter Amount (Rs)"),
-                validator: (v) {
-                  if (v == null || v.isEmpty) return 'Enter amount';
-                  final value = double.tryParse(v);
-                  if (value == null || value <= 0) {
-                    return 'Enter valid positive number';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 30),
-              if (_selectedCustomer != null && _selectedCustomer!.isNotEmpty)
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: isBalanceLoading
-                      ? const Text("Loading balance...",
-                          style: TextStyle(color: Colors.grey))
-                      : Text(
-                          "Remaining Balance: Rs.${customerBalance.toStringAsFixed(2)}",
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.red,
+      body: SafeArea(
+        child: SingleChildScrollView(
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+          padding: const EdgeInsets.all(18.0),
+          child: Form(
+            key: _formKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 20),
+                const Text(
+                  "Select Customer",
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Autocomplete<Map<String, dynamic>>(
+                  displayStringForOption: (option) =>
+                      option['name']?.toString() ?? '',
+                  optionsBuilder: (TextEditingValue textEditingValue) {
+                    if (textEditingValue.text.isEmpty) {
+                      return const Iterable<Map<String, dynamic>>.empty();
+                    }
+
+                    return _customersMap.where((customer) {
+                      return (customer['name'] ?? '')
+                          .toString()
+                          .toLowerCase()
+                          .contains(
+                            textEditingValue.text.toLowerCase(),
+                          );
+                    });
+                  },
+                  optionsViewBuilder: (
+                    context,
+                    onSelected,
+                    options,
+                  ) {
+                    return Align(
+                      alignment: Alignment.topLeft,
+                      child: Material(
+                        elevation: 4,
+                        child: Container(
+                          width: MediaQuery.of(context).size.width - 36,
+                          constraints: const BoxConstraints(maxHeight: 300),
+                          child: ListView.builder(
+                            shrinkWrap: true,
+                            itemCount: options.length,
+                            itemBuilder: (context, index) {
+                              final customer = options.elementAt(index);
+
+                              return InkWell(
+                                onTap: () => onSelected(customer),
+                                child: Container(
+                                  margin: const EdgeInsets.symmetric(
+                                    horizontal: 4,
+                                    vertical: 4,
+                                  ),
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    border: Border.all(
+                                      color: Colors.black12,
+                                    ),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 8,
+                                              vertical: 4,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: Colors.grey.shade300,
+                                              borderRadius:
+                                                  BorderRadius.circular(20),
+                                            ),
+                                            child: Text(
+                                              "#${customer['id']}",
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: Text(
+                                              customer['name'] ?? '',
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 16,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        customer['address'] ?? '',
+                                        style: TextStyle(
+                                          color: Colors.grey.shade700,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
                           ),
                         ),
+                      ),
+                    );
+                  },
+                  onSelected: (selection) {
+                    setState(() {
+                      _selectedCustomer = selection['name']?.toString() ?? '';
+                    });
+
+                    _fetchCustomerBalance(selection['id']);
+
+                    _amountFocusNode.requestFocus();
+                  },
+                  fieldViewBuilder: (
+                    context,
+                    controller,
+                    focusNode,
+                    onEditingComplete,
+                  ) {
+                    controller.text = _selectedCustomer ?? '';
+
+                    return TextField(
+                      controller: controller,
+                      focusNode: focusNode,
+                      onEditingComplete: onEditingComplete,
+                      decoration: inputDecoration("Select Customer"),
+                    );
+                  },
                 ),
-              const SizedBox(height: 50),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: _isSaving ? null : _saveCashPayment,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.black,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
+                const SizedBox(height: 10),
+                TextFormField(
+                  controller: _amountController,
+                  focusNode: _amountFocusNode,
+                  textInputAction: TextInputAction.done,
+                  keyboardType: TextInputType.number,
+                  decoration: inputDecoration("Enter Amount (Rs)"),
+                  validator: (v) {
+                    if (v == null || v.isEmpty) {
+                      return 'Enter amount';
+                    }
+
+                    final value = double.tryParse(v);
+
+                    if (value == null || value <= 0) {
+                      return 'Enter valid positive number';
+                    }
+
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 30),
+                if (_selectedCustomer != null && _selectedCustomer!.isNotEmpty)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: isBalanceLoading
+                        ? const Text(
+                            "Loading balance...",
+                            style: TextStyle(
+                              color: Colors.grey,
+                            ),
+                          )
+                        : Text(
+                            "Remaining Balance: Rs.${customerBalance.toStringAsFixed(2)}",
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.red,
+                            ),
+                          ),
                   ),
-                  child: _isSaving
-                      ? const CircularProgressIndicator(
-                          color: Colors.white, strokeWidth: 2)
-                      : Text(
-                          widget.transactionId == null
-                              ? "Save Cash Payment"
-                              : "Update Cash",
-                          style: const TextStyle(fontSize: 16),
-                        ),
+                const SizedBox(height: 50),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: _isSaving ? null : _saveCashPayment,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.black,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 14,
+                      ),
+                    ),
+                    child: _isSaving
+                        ? const CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 2,
+                          )
+                        : Text(
+                            widget.transactionId == null
+                                ? "Save Cash Payment"
+                                : "Update Cash",
+                            style: const TextStyle(fontSize: 16),
+                          ),
+                  ),
                 ),
-              ),
-            ],
+                const SizedBox(height: 30),
+              ],
+            ),
           ),
         ),
       ),

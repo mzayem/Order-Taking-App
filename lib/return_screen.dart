@@ -15,7 +15,7 @@ class ReturnScreen extends StatefulWidget {
 }
 
 class _ReturnScreenState extends State<ReturnScreen> {
-  List<String> customers = [];
+  List<Map<String, dynamic>> customers = [];
   List<Map<String, dynamic>> products = [];
 
   String? selectedCustomer;
@@ -169,12 +169,14 @@ class _ReturnScreenState extends State<ReturnScreen> {
 
   Future<void> _fetchCustomersAndProducts() async {
     try {
-      final cust = await ApiService.fetchCustomers();
+      await ApiService.fetchCustomers(); // sync DB
+
       final prod = await ApiService.fetchProducts();
+
+      await _loadCustomersFromDB();
 
       if (mounted) {
         setState(() {
-          customers = cust;
           products = prod;
         });
       }
@@ -186,9 +188,17 @@ class _ReturnScreenState extends State<ReturnScreen> {
   Future<void> _loadCustomersFromDB() async {
     try {
       final rows = await (await AppDatabase.init()).query('Customer');
+
       if (mounted) {
         setState(() {
-          customers = rows.map((r) => r['Name'] as String).toSet().toList();
+          customers = rows.map((r) {
+            return {
+              "id": r['CustomerID'],
+              "name": r['Name'],
+              "address": r['Address'] ?? '',
+              "isNarcoticsAllowed": r['IsNarcotics'] == 1,
+            };
+          }).toList();
         });
       }
     } catch (e) {
@@ -631,298 +641,399 @@ class _ReturnScreenState extends State<ReturnScreen> {
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 18.0),
-          child: Column(
-            children: [
-              const SizedBox(height: 18),
-              Autocomplete<String>(
-                key: _customerFieldKey,
-                initialValue: selectedCustomer != null
-                    ? TextEditingValue(text: selectedCustomer!)
-                    : const TextEditingValue(),
-                optionsBuilder: (TextEditingValue textEditingValue) {
-                  if (textEditingValue.text.isEmpty) {
-                    return customers;
-                  }
-                  return customers.where((String option) {
-                    return option
-                        .toLowerCase()
-                        .contains(textEditingValue.text.toLowerCase());
-                  });
-                },
-                fieldViewBuilder:
-                    (context, controller, focusNode, onEditingComplete) {
-                  return TextField(
-                    controller: controller,
-                    focusNode: focusNode,
-                    onEditingComplete: onEditingComplete,
-                    decoration: _inputDecoration("Select Customer..."),
-                    onChanged: (val) {
-                      setState(() {
-                        selectedCustomer = val;
-                      });
-                    },
-                  );
-                },
-                onSelected: (String selection) async {
-                  setState(() {
-                    selectedCustomer = selection;
-                  });
-
-                  final custId =
-                      await AppDatabase.insertCustomerIfNotExists(selection);
-
-                  final existingId =
-                      await AppDatabase.findTransactionForCustomerOnDate(
-                    custId,
-                    "Return",
-                    DateTime.now(),
-                  );
-
-                  if (existingId != null) {
-                    await _loadExisting(existingId);
-
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text("Previous return loaded"),
-                        backgroundColor: Colors.blue,
-                      ),
-                    );
-                  } else {
-                    setState(() {
-                      selectedProducts.clear();
-                    });
-                  }
-
-                  await _autoSaveDraft();
-
-                  _productFocusNode?.requestFocus();
-                },
+          child: SingleChildScrollView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minHeight: MediaQuery.of(context).size.height - kToolbarHeight,
               ),
-              const SizedBox(height: 16),
-              Autocomplete<Map<String, dynamic>>(
-                initialValue: selectedProduct != null
-                    ? TextEditingValue(text: selectedProduct!['name'])
-                    : const TextEditingValue(),
-                optionsBuilder: (TextEditingValue textEditingValue) {
-                  if (textEditingValue.text.isEmpty) {
-                    return products;
-                  }
-                  return products.where((p) => p['name']
-                      .toString()
-                      .toLowerCase()
-                      .contains(textEditingValue.text.toLowerCase()));
-                },
-                displayStringForOption: (p) => p['name'] as String,
-                fieldViewBuilder:
-                    (context, controller, focusNode, onEditingComplete) {
-                  _productFocusNode = focusNode;
-                  _productFieldController = controller;
-
-                  return TextField(
-                    controller: controller,
-                    focusNode: focusNode,
-                    onEditingComplete: onEditingComplete,
-                    decoration: _inputDecoration("Select Product...."),
-                    onChanged: (val) {
-                      final found = products.firstWhere(
-                        (p) =>
-                            p['name'].toString().toLowerCase() ==
-                            val.toLowerCase(),
-                        orElse: () => {},
-                      );
-
-                      setState(() {
-                        selectedProduct = found.isNotEmpty ? found : null;
-                      });
-                    },
-                  );
-                },
-                onSelected: (p) {
-                  setState(() {
-                    selectedProduct = p;
-
-                    final productName = p['name'];
-
-                    // Check if product already exists in list
-                    final index = selectedProducts.indexWhere(
-                      (item) => item['name'] == productName,
-                    );
-
-                    if (index != -1) {
-                      // Load existing qty & batch
-                      qtyController.text =
-                          selectedProducts[index]['qty'].toString();
-
-                      batchController.text =
-                          selectedProducts[index]['batch'].toString();
-                    } else {
-                      // Clear if new product
-                      qtyController.clear();
-                      batchController.clear();
-                    }
-                  });
-
-                  _qtyFocusNode.requestFocus();
-                },
-              ),
-              const SizedBox(height: 16),
-              Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: TextField(
-                      controller: qtyController,
-                      focusNode: _qtyFocusNode,
-                      keyboardType: TextInputType.number,
-                      textInputAction: TextInputAction.next,
-                      onSubmitted: (_) => _batchFocusNode.requestFocus(),
-                      decoration: _inputDecoration("QTY"),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextField(
-                      controller: batchController,
-                      focusNode: _batchFocusNode,
-                      onChanged: (batch) {
-                        if (selectedProduct == null) return;
+                  const SizedBox(height: 18),
+                  Autocomplete<Map<String, dynamic>>(
+                    key: _customerFieldKey,
+                    initialValue: selectedCustomer != null
+                        ? TextEditingValue(text: selectedCustomer!)
+                        : const TextEditingValue(),
+                    displayStringForOption: (option) =>
+                        option['name']?.toString() ?? '',
+                    optionsBuilder: (TextEditingValue textEditingValue) {
+                      return customers.where((customer) {
+                        return (customer['name'] ?? '')
+                            .toString()
+                            .toLowerCase()
+                            .contains(textEditingValue.text.toLowerCase());
+                      });
+                    },
+                    optionsViewBuilder: (
+                      context,
+                      onSelected,
+                      options,
+                    ) {
+                      return Align(
+                        alignment: Alignment.topLeft,
+                        child: Material(
+                          elevation: 4,
+                          child: Container(
+                            width: MediaQuery.of(context).size.width - 36,
+                            constraints: const BoxConstraints(maxHeight: 300),
+                            child: ListView.builder(
+                              shrinkWrap: true,
+                              itemCount: options.length,
+                              itemBuilder: (context, index) {
+                                final customer = options.elementAt(index);
 
-                        final productName = selectedProduct!['name'];
-
-                        final index = selectedProducts.indexWhere(
-                          (item) =>
-                              item['name'] == productName &&
-                              item['batch'] == batch,
-                        );
-
-                        if (index != -1) {
-                          // Load existing qty
-                          qtyController.text =
-                              selectedProducts[index]['qty'].toString();
-                        }
-                      },
-                      textInputAction: TextInputAction.next,
-                      onSubmitted: (_) => _remarksFocusNode.requestFocus(),
-                      decoration: _inputDecoration("Batch No"),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: remarksController,
-                onChanged: (_) => _autoSaveDraft(),
-                focusNode: _remarksFocusNode,
-                textInputAction: TextInputAction.done,
-                decoration: _inputDecoration("Remarks"),
-                maxLines: 2,
-              ),
-              const SizedBox(height: 18),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: _isCheckingBatch ? null : addProduct,
-                  style:
-                      ElevatedButton.styleFrom(backgroundColor: Colors.black),
-                  child: _isCheckingBatch
-                      ? const SizedBox(
-                          height: 20,
-                          width: 20,
-                          child: CircularProgressIndicator(
-                              color: Colors.white, strokeWidth: 2),
-                        )
-                      : const Text("Add Product",
-                          style: TextStyle(color: Colors.white)),
-                ),
-              ),
-              const SizedBox(height: 18),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text("Selected Products",
-                        style: TextStyle(
-                            fontSize: 18, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 12),
-                    Expanded(
-                      child: selectedProducts.isEmpty
-                          ? const Center(
-                              child: Text("No products added",
-                                  style: TextStyle(color: Colors.grey)))
-                          : ListView.builder(
-                              itemCount: selectedProducts.length,
-                              itemBuilder: (context, i) {
-                                final p = selectedProducts[i];
-                                return Card(
-                                  margin:
-                                      const EdgeInsets.symmetric(vertical: 8),
-                                  shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12)),
-                                  child: ListTile(
-                                    title: Text(p['name'],
-                                        style: const TextStyle(
-                                            fontWeight: FontWeight.w600)),
-                                    subtitle: Text(
-                                        "QTY: ${p['qty']}    Batch: ${p['batch']}"),
-                                    trailing: IconButton(
-                                      icon: const Icon(Icons.delete,
-                                          color: Colors.red),
-                                      onPressed: () {
-                                        setState(() {
-                                          selectedProducts.removeAt(i);
-                                        });
-                                      },
+                                return InkWell(
+                                  onTap: () => onSelected(customer),
+                                  child: Container(
+                                    margin: const EdgeInsets.symmetric(
+                                      horizontal: 4,
+                                      vertical: 4,
+                                    ),
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: Colors.black12),
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                horizontal: 8,
+                                                vertical: 4,
+                                              ),
+                                              decoration: BoxDecoration(
+                                                color: Colors.grey.shade300,
+                                                borderRadius:
+                                                    BorderRadius.circular(20),
+                                              ),
+                                              child: Text(
+                                                "#${customer['id']}",
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 10),
+                                            Expanded(
+                                              child: Text(
+                                                customer['name'] ?? '',
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 16,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          customer['address'] ?? '',
+                                          style: TextStyle(
+                                            color: Colors.grey.shade700,
+                                            fontSize: 13,
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 );
                               },
                             ),
-                    ),
-                  ],
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8.0, top: 8),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: cancel,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.red[400],
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10)),
+                          ),
                         ),
-                        child: const Text("Cancel"),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: () => saveAs("Return"),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10)),
+                      );
+                    },
+                    onSelected: (selection) async {
+                      setState(() {
+                        selectedCustomer = selection['name']?.toString() ?? '';
+                        selectedCustomerObj = selection;
+                      });
+
+                      final custId = selection['id'];
+
+                      final existingId =
+                          await AppDatabase.findTransactionForCustomerOnDate(
+                        custId,
+                        "Return",
+                        DateTime.now(),
+                      );
+
+                      if (existingId != null) {
+                        await _loadExisting(existingId);
+
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text("Previous return loaded"),
+                            backgroundColor: Colors.blue,
+                          ),
+                        );
+                      } else {
+                        setState(() {
+                          selectedProducts.clear();
+                        });
+                      }
+
+                      await _autoSaveDraft();
+
+                      _productFocusNode?.requestFocus();
+                    },
+                    fieldViewBuilder:
+                        (context, controller, focusNode, onEditingComplete) {
+                      controller.text = selectedCustomer ?? '';
+
+                      return TextField(
+                        controller: controller,
+                        focusNode: focusNode,
+                        onEditingComplete: onEditingComplete,
+                        decoration: _inputDecoration("Select Customer..."),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  Autocomplete<Map<String, dynamic>>(
+                    initialValue: selectedProduct != null
+                        ? TextEditingValue(text: selectedProduct!['name'])
+                        : const TextEditingValue(),
+                    optionsBuilder: (TextEditingValue textEditingValue) {
+                      if (textEditingValue.text.isEmpty) {
+                        return products;
+                      }
+                      final query = textEditingValue.text.toLowerCase();
+                      return products.where((p) {
+                        final nameLow = p['name'].toString().toLowerCase();
+                        return nameLow.startsWith(query);
+                      });
+                    },
+                    displayStringForOption: (p) => p['name'] as String,
+                    fieldViewBuilder:
+                        (context, controller, focusNode, onEditingComplete) {
+                      _productFocusNode = focusNode;
+                      _productFieldController = controller;
+
+                      return TextField(
+                        controller: controller,
+                        focusNode: focusNode,
+                        onEditingComplete: onEditingComplete,
+                        decoration: _inputDecoration("Select Product...."),
+                        onChanged: (val) {
+                          final found = products.firstWhere(
+                            (p) =>
+                                p['name'].toString().toLowerCase() ==
+                                val.toLowerCase(),
+                            orElse: () => {},
+                          );
+
+                          setState(() {
+                            selectedProduct = found.isNotEmpty ? found : null;
+                          });
+                        },
+                      );
+                    },
+                    onSelected: (p) {
+                      setState(() {
+                        selectedProduct = p;
+
+                        final productName = p['name'];
+
+                        // Check if product already exists in list
+                        final index = selectedProducts.indexWhere(
+                          (item) => item['name'] == productName,
+                        );
+
+                        if (index != -1) {
+                          // Load existing qty & batch
+                          qtyController.text =
+                              selectedProducts[index]['qty'].toString();
+
+                          batchController.text =
+                              selectedProducts[index]['batch'].toString();
+                        } else {
+                          // Clear if new product
+                          qtyController.clear();
+                          batchController.clear();
+                        }
+                      });
+
+                      _qtyFocusNode.requestFocus();
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: qtyController,
+                          focusNode: _qtyFocusNode,
+                          keyboardType: TextInputType.number,
+                          textInputAction: TextInputAction.next,
+                          onSubmitted: (_) => _batchFocusNode.requestFocus(),
+                          decoration: _inputDecoration("QTY"),
                         ),
-                        child: _isSaving
-                            ? const SizedBox(
-                                height: 20,
-                                width: 20,
-                                child: CircularProgressIndicator(
-                                    color: Colors.white, strokeWidth: 2),
-                              )
-                            : const Text("Save"),
                       ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextField(
+                          controller: batchController,
+                          focusNode: _batchFocusNode,
+                          onChanged: (batch) {
+                            if (selectedProduct == null) return;
+
+                            final productName = selectedProduct!['name'];
+
+                            final index = selectedProducts.indexWhere(
+                              (item) =>
+                                  item['name'] == productName &&
+                                  item['batch'] == batch,
+                            );
+
+                            if (index != -1) {
+                              // Load existing qty
+                              qtyController.text =
+                                  selectedProducts[index]['qty'].toString();
+                            }
+                          },
+                          textInputAction: TextInputAction.next,
+                          onSubmitted: (_) => _remarksFocusNode.requestFocus(),
+                          decoration: _inputDecoration("Batch No"),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: remarksController,
+                    onChanged: (_) => _autoSaveDraft(),
+                    focusNode: _remarksFocusNode,
+                    textInputAction: TextInputAction.done,
+                    decoration: _inputDecoration("Remarks"),
+                    maxLines: 2,
+                  ),
+                  const SizedBox(height: 18),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _isCheckingBatch ? null : addProduct,
+                      style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.black),
+                      child: _isCheckingBatch
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(
+                                  color: Colors.white, strokeWidth: 2),
+                            )
+                          : const Text("Add Product",
+                              style: TextStyle(color: Colors.white)),
                     ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(height: 18),
+                  const Text(
+                    "Selected Products",
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  selectedProducts.isEmpty
+                      ? const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(20),
+                            child: Text(
+                              "No products added",
+                              style: TextStyle(color: Colors.grey),
+                            ),
+                          ),
+                        )
+                      : ListView.builder(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          itemCount: selectedProducts.length,
+                          itemBuilder: (context, i) {
+                            final p = selectedProducts[i];
+
+                            return Card(
+                              margin: const EdgeInsets.symmetric(vertical: 8),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: ListTile(
+                                title: Text(
+                                  p['name'],
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                subtitle: Text(
+                                  "QTY: ${p['qty']}    Batch: ${p['batch']}",
+                                ),
+                                trailing: IconButton(
+                                  icon: const Icon(
+                                    Icons.delete,
+                                    color: Colors.red,
+                                  ),
+                                  onPressed: () {
+                                    setState(() {
+                                      selectedProducts.removeAt(i);
+                                    });
+                                  },
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8.0, top: 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: cancel,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red[400],
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10)),
+                            ),
+                            child: const Text("Cancel"),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: () => saveAs("Return"),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.green,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10)),
+                            ),
+                            child: _isSaving
+                                ? const SizedBox(
+                                    height: 20,
+                                    width: 20,
+                                    child: CircularProgressIndicator(
+                                        color: Colors.white, strokeWidth: 2),
+                                  )
+                                : const Text("Save"),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  SizedBox(height: MediaQuery.of(context).padding.bottom),
+                ],
               ),
-              SizedBox(height: MediaQuery.of(context).padding.bottom),
-            ],
+            ),
           ),
         ),
       ),

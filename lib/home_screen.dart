@@ -63,7 +63,7 @@ class _HomeScreenState extends State<HomeScreen> {
         uniqueCustomers[name] = {
           "id": id,
           "name": name,
-          "isNarcoticsAllowed": (r['IsNarcoticsAllowed'] as int? ?? 0) == 1,
+          "isNarcoticsAllowed": (r['IsNarcotics'] as int? ?? 0) == 1,
           "townId": r['Town']?.toString() ?? ''
         };
       }
@@ -648,7 +648,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
       }
 
       dataList.add({
-        'clientId': id, // local TransactionID for tracking
+        'clientId': id.toString(), // local TransactionID for tracking
         'date': header['Date'] ?? DateTime.now().toUtc().toIso8601String(),
         'customerId': header['CustomerID'],
         'type': typeValue,
@@ -670,20 +670,41 @@ class _OverviewScreenState extends State<OverviewScreen> {
     );
 
     if (syncRes['ok'] == true) {
-      for (final id in validIdsToUpload) {
-        await AppDatabase.markTransactionSynced(id);
-      }
-
       final Map<dynamic, dynamic> data = syncRes['data'] ?? {};
-      String msg = 'Upload success: ${validIdsToUpload.length} transactions';
-      if (data.containsKey('message')) {
-        msg = data['message'].toString();
-      } else if (data.containsKey('response')) {
-        msg = data['response'].toString();
-      }
 
-      if (mounted) {
-        UiUtils.showBeautifulSnackBar(context, msg, isSuccess: true);
+      if (data['status'] == 'completed' && data['results'] != null) {
+        final List<dynamic> results = data['results'];
+        List<String> failedIds = [];
+
+        for (var result in results) {
+          int clientId = -1;
+          if (result['clientId'] is int) {
+            clientId = result['clientId'];
+          } else {
+            clientId = int.tryParse(result['clientId'].toString()) ?? -1;
+          }
+
+          bool success = result['success'] == true;
+
+          if (success) {
+            await AppDatabase.markTransactionSynced(clientId);
+          } else {
+            await AppDatabase.markTransactionFailed(clientId);
+            failedIds.add(clientId.toString());
+          }
+        }
+
+        if (failedIds.isNotEmpty) {
+          if (mounted) {
+            UiUtils.showBeautifulSnackBar(
+                context, 'Failed transactions: ${failedIds.join(", ")}',
+                isSuccess: false);
+          }
+        }
+      } else {
+        for (final id in validIdsToUpload) {
+          await AppDatabase.markTransactionSynced(id);
+        }
       }
     } else {
       for (final id in validIdsToUpload) {
@@ -695,7 +716,28 @@ class _OverviewScreenState extends State<OverviewScreen> {
       String errorMsg = '${syncRes['error']}';
       if (syncRes['response'] != null &&
           syncRes['response'].toString().isNotEmpty) {
-        errorMsg += ' - ${syncRes['response']}';
+        try {
+          final decoded = jsonDecode(syncRes['response'].toString());
+          if (decoded is Map<String, dynamic>) {
+            final status = decoded['status'];
+            final results = decoded['results'];
+            String? message;
+            if (results is List && results.isNotEmpty) {
+              message = results[0]['message']?.toString();
+            }
+            if (status != null && message != null) {
+              errorMsg = 'Status: $status, Message: $message';
+            } else if (status != null) {
+              errorMsg = 'Status: $status';
+            } else {
+              errorMsg += ' - ${syncRes['response']}';
+            }
+          } else {
+            errorMsg += ' - ${syncRes['response']}';
+          }
+        } catch (e) {
+          errorMsg += ' - ${syncRes['response']}';
+        }
       }
       if (mounted) {
         UiUtils.showBeautifulSnackBar(context, errorMsg, isSuccess: false);
@@ -716,6 +758,18 @@ class _OverviewScreenState extends State<OverviewScreen> {
     if (_selectedTxIds.isEmpty) return;
 
     final ids = _selectedTxIds.toList();
+    await _exportTransactions(ids);
+  }
+
+  Future<void> _exportTransactions(List<int> ids) async {
+    if (ids.isEmpty) {
+      if (mounted) {
+        UiUtils.showBeautifulSnackBar(context, "No transactions to export",
+            isSuccess: false);
+      }
+      return;
+    }
+
     final List<Map<String, dynamic>> dataList = [];
 
     for (final id in ids) {
@@ -747,7 +801,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
       }
 
       dataList.add({
-        'clientId': id,
+        'clientId': id.toString(),
         'date': header['Date'] ?? DateTime.now().toUtc().toIso8601String(),
         'customerId': header['CustomerID'],
         'type': typeValue,
@@ -964,7 +1018,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
                           style: const TextStyle(
                               fontSize: 18, fontWeight: FontWeight.bold)),
                       const SizedBox(height: 6),
-                      Text("$town | ${_shortDate(date)}",
+                      Text("ID: $txnId | $town | ${_shortDate(date)}",
                           style: const TextStyle(color: Colors.grey)),
                     ]),
               ),
@@ -1720,7 +1774,10 @@ class _OverviewScreenState extends State<OverviewScreen> {
               Column(children: [
                 ElevatedButton(
                     onPressed: () {
-                      _exportSelected();
+                      final ids = filtered
+                          .map((e) => e['transactionId'] as int)
+                          .toList();
+                      _exportTransactions(ids);
                     },
                     style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.green,

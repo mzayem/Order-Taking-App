@@ -65,106 +65,115 @@ class _ProfileScreenState extends State<ProfileScreen> {
         foregroundColor: Colors.white,
         elevation: 0,
       ),
-      body: Column(
-        children: [
-          // 🔵 HEADER SECTION
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 30),
-            decoration: const BoxDecoration(
-              color: Colors.black,
-              borderRadius: BorderRadius.vertical(
-                bottom: Radius.circular(30),
-              ),
-            ),
+      body: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(
             child: Column(
               children: [
-                // 🖼 LOGO (Replace with your asset)
-                CircleAvatar(
-                  radius: 70,
-                  backgroundColor: Colors.white,
-                  child: Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Image.asset(
-                      'assets/images/splash.png', // 🔥 Add your logo here
-                      fit: BoxFit.contain,
+                // 🔵 HEADER SECTION
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 30),
+                  decoration: const BoxDecoration(
+                    color: Colors.black,
+                    borderRadius: BorderRadius.vertical(
+                      bottom: Radius.circular(30),
+                    ),
+                  ),
+                  child: Column(
+                    children: [
+                      // 🖼 LOGO (Replace with your asset)
+                      CircleAvatar(
+                        radius: 70,
+                        backgroundColor: Colors.white,
+                        child: Padding(
+                          padding: const EdgeInsets.all(8.0),
+                          child: Image.asset(
+                            'assets/images/splash.png', // 🔥 Add your logo here
+                            fit: BoxFit.contain,
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(height: 15),
+
+                      // 👤 Username
+                      Text(
+                        _username,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+
+                      const SizedBox(height: 5),
+
+                      // 📍 Town
+                      // Text(
+                      //   _town,
+                      //   style: const TextStyle(
+                      //     color: Colors.white70,
+                      //     fontSize: 16,
+                      //   ),
+                      // ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 30),
+
+                // 🧾 INFO CARD
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Card(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(15),
+                    ),
+                    elevation: 4,
+                    child: Column(
+                      children: [
+                        ListTile(
+                          leading: const Icon(Icons.person),
+                          title: const Text("Username"),
+                          subtitle: Text(_username),
+                        ),
+                        const Divider(height: 1),
+                        ListTile(
+                          leading: const Icon(Icons.location_city),
+                          title: const Text("Town"),
+                          subtitle: Text(_town),
+                        ),
+                      ],
                     ),
                   ),
                 ),
-
-                const SizedBox(height: 15),
-
-                // 👤 Username
-                Text(
-                  _username,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-
-                const SizedBox(height: 5),
-
-                // 📍 Town
-                // Text(
-                //   _town,
-                //   style: const TextStyle(
-                //     color: Colors.white70,
-                //     fontSize: 16,
-                //   ),
-                // ),
               ],
             ),
           ),
-
-          const SizedBox(height: 30),
-
-          // 🧾 INFO CARD
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Card(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(15),
-              ),
-              elevation: 4,
-              child: Column(
-                children: [
-                  ListTile(
-                    leading: const Icon(Icons.person),
-                    title: const Text("Username"),
-                    subtitle: Text(_username),
+          SliverFillRemaining(
+            hasScrollBody: false,
+            fillOverscroll: true,
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: ElevatedButton.icon(
+                  onPressed: () => _logout(context),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(double.infinity, 55),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
-                  const Divider(height: 1),
-                  ListTile(
-                    leading: const Icon(Icons.location_city),
-                    title: const Text("Town"),
-                    subtitle: Text(_town),
+                  icon: const Icon(Icons.logout),
+                  label: const Text(
+                    "Logout",
+                    style: TextStyle(fontSize: 18),
                   ),
-                ],
-              ),
-            ),
-          ),
-
-          const Spacer(),
-
-          // 🔴 LOGOUT BUTTON
-          Padding(
-            padding: const EdgeInsets.all(20),
-            child: ElevatedButton.icon(
-              onPressed: () => _logout(context),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
-                foregroundColor: Colors.white,
-                minimumSize: const Size(double.infinity, 55),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
                 ),
-              ),
-              icon: const Icon(Icons.logout),
-              label: const Text(
-                "Logout",
-                style: TextStyle(fontSize: 18),
               ),
             ),
           ),

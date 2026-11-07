@@ -181,13 +181,22 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
     try {
       final db = await AppDatabase.init();
       final rows = await db.query('Customer');
+
+      print("========= CUSTOMER DATA =========");
+
+      for (final row in rows.take(5)) {
+        print(row);
+      }
+
       final maps = rows
           .map((r) => {
                 "id": r['CustomerID'],
                 "name": r['Name'],
-                "isNarcoticsAllowed": r['IsNarcoticsAllowed'] == 1,
+                "address": r['Address'] ?? '',
+                "isNarcoticsAllowed": r['IsNarcotics'] == 1,
               })
           .toList();
+
       if (mounted) setState(() => customers = maps);
     } catch (e) {
       debugPrint("DB err: $e");
@@ -643,10 +652,94 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
               displayStringForOption: (option) =>
                   option['name']?.toString() ?? '',
               optionsBuilder: (TextEditingValue textEditingValue) {
-                return customers.where((customer) =>
-                    (customer['name']?.toString() ?? '')
-                        .toLowerCase()
-                        .contains(textEditingValue.text.toLowerCase()));
+                return customers.where(
+                  (customer) => (customer['name']?.toString() ?? '')
+                      .toLowerCase()
+                      .contains(textEditingValue.text.toLowerCase()),
+                );
+              },
+              optionsViewBuilder: (
+                context,
+                AutocompleteOnSelected<Map<String, dynamic>> onSelected,
+                Iterable<Map<String, dynamic>> options,
+              ) {
+                return Align(
+                  alignment: Alignment.topLeft,
+                  child: Material(
+                    elevation: 4,
+                    child: Container(
+                      width: MediaQuery.of(context).size.width - 32,
+                      constraints: const BoxConstraints(maxHeight: 300),
+                      child: ListView.builder(
+                        padding: EdgeInsets.zero,
+                        shrinkWrap: true,
+                        itemCount: options.length,
+                        itemBuilder: (context, index) {
+                          final customer = options.elementAt(index);
+
+                          return InkWell(
+                            onTap: () => onSelected(customer),
+                            child: Container(
+                              margin: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 4,
+                              ),
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.black),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 4,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.grey.shade300,
+                                          borderRadius:
+                                              BorderRadius.circular(20),
+                                        ),
+                                        child: Text(
+                                          "#${customer['id']}",
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Text(
+                                          customer['name'] ?? '',
+                                          style: const TextStyle(
+                                            fontSize: 20,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    customer['address'] ?? '',
+                                    style: TextStyle(
+                                      color: Colors.grey.shade700,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                );
               },
               onSelected: (selection) async {
                 final custId = selection['id'];
@@ -660,7 +753,6 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
                 await _saveDraft();
                 _productFocusNode?.requestFocus();
 
-                /// NEW: Check if today's order exists
                 final existingId =
                     await AppDatabase.findTransactionForCustomerOnDate(
                   custId,
@@ -678,7 +770,6 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
                     ),
                   );
                 } else {
-                  /// No previous order — clear list
                   setState(() {
                     selectedProducts.clear();
                   });
@@ -711,9 +802,11 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
                   return const Iterable<Map<String, dynamic>>.empty();
                 }
 
-                return products.where((p) => p['name']
-                    .toLowerCase()
-                    .contains(textEditingValue.text.toLowerCase()));
+                final query = textEditingValue.text.toLowerCase();
+                return products.where((p) {
+                  final nameLow = p['name'].toLowerCase();
+                  return nameLow.startsWith(query);
+                });
               },
               onSelected: (selection) {
                 final productName = selection['name'];

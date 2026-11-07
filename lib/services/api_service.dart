@@ -31,7 +31,9 @@ class ApiService {
       final baseUrl = prefs.getString('baseUrl') ?? '';
       final userId = prefs.getString('userId') ?? '';
       final townIds = prefs.getStringList('townIds') ?? [];
-
+      print("baseUrl = $baseUrl");
+      print("userId = $userId");
+      print("townIds = $townIds");
       if (baseUrl.isEmpty || userId.isEmpty || townIds.isEmpty) {
         return await _customersFromDB();
       }
@@ -46,7 +48,8 @@ class ApiService {
           "townIds": townIds.map(int.parse).toList(),
         }),
       );
-
+      print("Customer API Status = ${response.statusCode}");
+      print("Customer API Body = ${response.body}");
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
 
@@ -54,24 +57,43 @@ class ApiService {
 
         Set<String> customers = {};
 
-        // is isNarcoticsAllowed should be added to the API response and handled in order creation
         for (var c in list) {
-          customers.add(c['customerName']);
+          // print("API CUSTOMER => $c");
+
+          customers.add(c['customerName'] ?? '');
 
           await AppDatabase.upsertCustomer({
-            'CustomerID': c['customerId'],
-            'Name': c['customerName'],
-            'Town': c['townName'] ?? '',
-            'IsNarcoticsAllowed': c['isNarcoticsAllowed'] ??
-                false, // need to be added in DataBase
+            'customerId': c['customerId'],
+            'customerName': c['customerName'],
+            'address': c['address'] ?? '', // FIXED
+            'townID': c['townID'],
+            'isNarcoticsAllowed': c['isNarcoticsAllowed'] ?? false,
           });
+
+          final db = await AppDatabase.init();
+
+          final row = await db.query(
+            'Customer',
+            where: 'CustomerID = ?',
+            whereArgs: [c['customerId']],
+          );
+
+          // if (row.isNotEmpty) {
+          //   print("DB CUSTOMER => ${row.first}");
+          // }
         }
 
         return customers.toList();
       }
 
       return await _customersFromDB();
-    } catch (e) {
+    } catch (e, stackTrace) {
+      print("================================");
+      print("Customer Fetch Error");
+      print(e);
+      print(stackTrace);
+      print("================================");
+
       return await _customersFromDB();
     }
   }
@@ -161,7 +183,7 @@ class ApiService {
     }
 
     return {
-      'clientId': transactionId, // local ID used for tracking
+      'clientId': transactionId.toString(), // local ID used for tracking
       'date': DateTime.now().toUtc().toIso8601String(),
       'customerId': header['CustomerID'] as int,
       'type': convertType(header['Type'] as String),
@@ -270,10 +292,23 @@ class ApiService {
             response.body.isNotEmpty ? jsonDecode(response.body) : {};
         return {'ok': true, 'data': respJson};
       } else {
+        String errorMsg = response.body;
+        try {
+          final decoded = jsonDecode(response.body);
+          if (decoded is Map) {
+            errorMsg = (decoded['message'] ??
+                    decoded['error'] ??
+                    decoded['title'] ??
+                    decoded['errors']?.toString() ??
+                    errorMsg)
+                .toString();
+          }
+        } catch (_) {}
+
         return {
           'ok': false,
           'error': 'HTTP ${response.statusCode}',
-          'response': response.body,
+          'response': errorMsg,
         };
       }
     } catch (e) {
