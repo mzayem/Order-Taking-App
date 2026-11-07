@@ -1,6 +1,10 @@
 import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:dmc/db/database.dart';
+import 'package:dmc/theme/app_theme.dart';
 import 'package:dmc/url_setup.dart';
+import 'package:dmc/widgets/brand_logo.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -16,55 +20,81 @@ class Splashscreen extends StatefulWidget {
 
 class _SplashscreenState extends State<Splashscreen>
     with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _scaleAnimation;
-  late Animation<double> _fadeAnimation;
+  // The full Softifex logo pops up in 750 ms; the hold + fade-out to the next
+  // screen add about 500 ms, so the whole splash stays under 1.5 s.
+  late final AnimationController _controller = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 750));
+
+  // 0.55 -> 1.07 -> 1.0: a small overshoot, like a pop-up. The overshoot is
+  // built into the sequence itself: feeding an overshooting curve such as
+  // easeOutBack into a TweenSequence trips its "t must be 0..1" assertion.
+  late final Animation<double> _pop = TweenSequence<double>([
+    TweenSequenceItem(
+        tween: Tween(begin: 0.55, end: 1.07)
+            .chain(CurveTween(curve: Curves.easeOutCubic)),
+        weight: 65),
+    TweenSequenceItem(
+        tween: Tween(begin: 1.07, end: 1.0)
+            .chain(CurveTween(curve: Curves.easeInOut)),
+        weight: 35),
+  ]).animate(_controller);
+
+  // Appears quickly, so the logo never looks like it is stuck half-visible.
+  late final Animation<double> _fade = CurvedAnimation(
+      parent: _controller,
+      curve: const Interval(0.0, 0.4, curve: Curves.easeOut));
+
+  bool _started = false;
 
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) return;
+    _started = true;
 
-    _controller =
-        AnimationController(vsync: this, duration: const Duration(seconds: 3));
-    _scaleAnimation = Tween<double>(begin: 0.6, end: 1.0).animate(
-        CurvedAnimation(parent: _controller, curve: Curves.easeOutBack));
-    _fadeAnimation = Tween<double>(begin: 0, end: 1)
-        .animate(CurvedAnimation(parent: _controller, curve: Curves.easeIn));
-    _controller.forward();
-
-    _startAppFlow();
+    // The route decision runs alongside the animation, not after it.
+    final route = _decideRoute();
+    final Future<void> animation;
+    if (MediaQuery.of(context).disableAnimations) {
+      _controller.value = 1; // reduce motion: logo is simply there
+      animation = Future.value();
+    } else {
+      animation = _controller.forward().orCancel.catchError((_) {});
+    }
+    _go(route, animation);
   }
 
-  Future<void> _startAppFlow() async {
-    await Future.delayed(const Duration(milliseconds: 1500));
-
+  Future<Widget> _decideRoute() async {
     final prefs = await SharedPreferences.getInstance();
     final isUrlSaved = prefs.getBool('isUrlSaved') ?? false;
-    // final isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
     // Token, not userId: devices logged in before the token update log in once more.
     final isLoggedIn = prefs.getString('token') ?? "";
 
-    await Future.delayed(const Duration(milliseconds: 600));
-    if (!mounted) return;
-
-    if (!isUrlSaved) {
-      Navigator.pushReplacement(
-          context, MaterialPageRoute(builder: (_) => const UrlSetupScreen()));
-    } else if (await AppDatabase.isLicenseExpired()) {
+    if (!isUrlSaved) return const UrlSetupScreen();
+    if (await AppDatabase.isLicenseExpired()) {
       // Saving the URL again fetches a fresh licence.
-      if (!mounted) return;
-      Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-              builder: (_) => const UrlSetupScreen(
-                  message: "License expired. Tap Save to renew it.")));
-    } else if (isLoggedIn.isNotEmpty) {
-      Navigator.pushReplacement(
-          context, MaterialPageRoute(builder: (_) => const HomeScreen()));
-    } else {
-      Navigator.pushReplacement(
-          context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+      return const UrlSetupScreen(
+          message: "License expired. Tap Save to renew it.");
     }
+    if (isLoggedIn.isNotEmpty) return const HomeScreen();
+    return const LoginScreen();
+  }
+
+  Future<void> _go(Future<Widget> route, Future<void> animation) async {
+    final results = await Future.wait<Object?>([route, animation]);
+    // A short hold so the finished logo is actually seen.
+    await Future.delayed(const Duration(milliseconds: 250));
+    if (!mounted) return;
+    final next = results[0] as Widget;
+    Navigator.pushReplacement(
+      context,
+      PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 250),
+        pageBuilder: (_, __, ___) => next,
+        transitionsBuilder: (_, a, __, child) =>
+            FadeTransition(opacity: a, child: child),
+      ),
+    );
   }
 
   @override
@@ -75,16 +105,36 @@ class _SplashscreenState extends State<Splashscreen>
 
   @override
   Widget build(BuildContext context) {
+    // Fits any phone: up to 340 wide, never wider than the screen minus margins.
+    final logoWidth = math.min(MediaQuery.sizeOf(context).width - 56, 340.0);
+
     return Scaffold(
-      backgroundColor: Colors.white,
       body: Center(
-        child: ScaleTransition(
-          scale: _scaleAnimation,
+        child: RepaintBoundary(
           child: FadeTransition(
-            opacity: _fadeAnimation,
-            child: ClipOval(
-              child: Image.asset('assets/images/splash.png',
-                  width: 250, fit: BoxFit.cover),
+            opacity: _fade,
+            child: ScaleTransition(
+              scale: _pop,
+              child: Stack(
+                alignment: Alignment.center,
+                clipBehavior: Clip.none,
+                children: [
+                  // Soft light behind the logo (one static gradient).
+                  Container(
+                    width: logoWidth * 1.15,
+                    height: logoWidth * 0.62,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: RadialGradient(colors: [
+                        AppColors.accent
+                            .withValues(alpha: AppColors.isDark ? 0.28 : 0.18),
+                        AppColors.accent.withValues(alpha: 0),
+                      ]),
+                    ),
+                  ),
+                  BrandLogo(width: logoWidth),
+                ],
+              ),
             ),
           ),
         ),

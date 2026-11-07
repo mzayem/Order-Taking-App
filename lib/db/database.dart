@@ -13,7 +13,7 @@ class AppDatabase {
 
     _db = await openDatabase(
       path,
-      version: 6,
+      version: 7,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON;');
       },
@@ -111,8 +111,13 @@ class AppDatabase {
         ''');
 
         await _createVendorGroupTable(db);
+        await createAppLogTable(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 7) {
+          await createAppLogTable(db); // new table only; no data touched
+        }
+
         if (oldVersion < 3) {
           try {
             await db.execute('ALTER TABLE Product ADD COLUMN ProductType TEXT');
@@ -138,8 +143,8 @@ class AppDatabase {
           // Who took the transaction (salesman). Older rows stay NULL.
           for (final col in ['UserID', 'UserName']) {
             try {
-              await db.execute(
-                  'ALTER TABLE "Transaction" ADD COLUMN $col TEXT');
+              await db
+                  .execute('ALTER TABLE "Transaction" ADD COLUMN $col TEXT');
             } catch (_) {}
           }
         }
@@ -155,6 +160,21 @@ class AppDatabase {
     );
 
     return _db!;
+  }
+
+  /// Local activity log read by the Activity page (see services/app_log.dart).
+  static Future<void> createAppLogTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS AppLog(
+        LogID INTEGER PRIMARY KEY AUTOINCREMENT,
+        Ts INTEGER NOT NULL,
+        Level TEXT NOT NULL,
+        Category TEXT NOT NULL,
+        Message TEXT NOT NULL
+      )
+    ''');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_applog_filter ON AppLog(Level, Category, Ts)');
   }
 
   static Future<void> _createVendorGroupTable(Database db) async {
@@ -209,7 +229,8 @@ class AppDatabase {
     });
   }
 
-  static Future<void> upsertProducts(List<Map<String, dynamic>> products) async {
+  static Future<void> upsertProducts(
+      List<Map<String, dynamic>> products) async {
     final db = await init();
     await db.transaction((txn) async {
       final batch = txn.batch();
@@ -640,6 +661,38 @@ class AppDatabase {
         },
         where: 'TransactionID = ?',
         whereArgs: [transactionId]);
+  }
+
+  /// The logged-in user's transactions taken between [from] and [to]
+  /// (whole days, inclusive): id, type and sync status, oldest first.
+  static Future<List<Map<String, dynamic>>> getTransactionsInRange(
+      DateTime from, DateTime to) async {
+    final db = await init();
+    final start = DateTime(from.year, from.month, from.day);
+    final end =
+        DateTime(to.year, to.month, to.day).add(const Duration(days: 1));
+    return db.query('"Transaction"',
+        columns: ['TransactionID', 'Type', 'SyncStatus', 'Date'],
+        where: 'Date >= ? AND Date < ? AND $_ownerFilter',
+        whereArgs: [
+          start.toIso8601String(),
+          end.toIso8601String(),
+          await currentUserId(),
+        ],
+        orderBy: 'Date ASC');
+  }
+
+  /// Deletes several transactions (and their details) in one DB transaction.
+  static Future<void> deleteTransactions(List<int> ids) async {
+    if (ids.isEmpty) return;
+    final db = await init();
+    final marks = List.filled(ids.length, '?').join(',');
+    await db.transaction((txn) async {
+      await txn.delete('TransactionDetail',
+          where: 'TransactionID IN ($marks)', whereArgs: ids);
+      await txn.delete('"Transaction"',
+          where: 'TransactionID IN ($marks)', whereArgs: ids);
+    });
   }
 
   static Future<void> deleteTransaction(int transactionId) async {

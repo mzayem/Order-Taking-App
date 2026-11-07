@@ -2,6 +2,10 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:dmc/url_setup.dart';
 import 'package:flutter/material.dart';
+import 'package:dmc/widgets/app_toast.dart';
+import 'package:dmc/theme/app_theme.dart';
+import 'package:dmc/widgets/brand_logo.dart';
+import 'package:dmc/services/app_log.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'home_screen.dart';
@@ -95,14 +99,10 @@ class _LoginScreenState extends State<LoginScreen> {
         await prefs.setStringList("townIds", townIds);
         await prefs.setStringList("townNames", townNames);
 
+        AppLog.info(LogCategory.auth, 'Signed in: $username');
         if (!mounted) return;
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Login Successful"),
-            backgroundColor: Colors.green,
-          ),
-        );
+        AppToast.show(context, "Login Successful", type: ToastType.success);
 
         Navigator.pushReplacement(
           context,
@@ -157,7 +157,7 @@ class _LoginScreenState extends State<LoginScreen> {
   void _showMessage(String msg) {
     if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    AppToast.show(context, msg, type: ToastType.error);
   }
 
   @override
@@ -170,12 +170,10 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
       appBar: AppBar(
-        backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.black),
+          icon: Icon(Icons.arrow_back, color: AppColors.textPrimary),
           onPressed: () {
             Navigator.pushReplacement(
               context,
@@ -190,13 +188,7 @@ class _LoginScreenState extends State<LoginScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Column(
               children: [
-                ClipOval(
-                  child: Image.asset(
-                    'assets/images/splash.png',
-                    width: 250,
-                    fit: BoxFit.cover,
-                  ),
-                ),
+                const BrandLogo(width: 250),
 
                 const SizedBox(height: 20),
 
@@ -209,7 +201,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   "Login",
                   style: TextStyle(
                     fontSize: 28,
-                    fontWeight: FontWeight.w500,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 // ),
@@ -261,22 +253,21 @@ class _LoginScreenState extends State<LoginScreen> {
                   width: double.infinity,
                   height: 48,
                   child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.black,
-                    ),
+                    style: AppButtons.primary,
                     onPressed: isLoggingIn ? null : _performLogin,
                     child: isLoggingIn
-                        ? const SizedBox(
+                        ? SizedBox(
                             height: 20,
                             width: 20,
                             child: CircularProgressIndicator(
-                              color: Colors.white,
+                              color: AppColors.onBrand,
                               strokeWidth: 2,
                             ),
                           )
-                        : const Text(
+                        : Text(
                             "Login",
-                            style: TextStyle(fontSize: 16, color: Colors.white),
+                            style: TextStyle(
+                                fontSize: 16, color: AppColors.onBrand),
                           ),
                   ),
                 ),

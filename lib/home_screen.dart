@@ -1,6 +1,8 @@
 // lib/screens/home_screen.dart
 
 import 'package:flutter/material.dart';
+import 'package:dmc/widgets/app_toast.dart';
+import 'package:dmc/theme/app_theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 // Screens
@@ -8,7 +10,12 @@ import 'order_screen.dart';
 import 'cash_screen.dart';
 import 'return_screen.dart';
 import 'profile_screen.dart';
-import 'notification_screen.dart';
+import 'widgets/floating_nav_bar.dart';
+import 'widgets/overview_hero.dart';
+import 'widgets/motion.dart';
+import 'services/transaction_export.dart';
+import 'widgets/notification_dropdown.dart';
+import 'widgets/skeleton.dart';
 import 'services/local_notifier.dart';
 
 // Local database + Sync
@@ -19,8 +26,6 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'dart:async';
 import 'dart:io';
-import 'package:share_plus/share_plus.dart';
-import 'package:path_provider/path_provider.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -115,25 +120,48 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // The bar floats over the page background (not over content), so tab
+    // screens keep their own bottom layout untouched.
     return Scaffold(
-      body: _screens[_selectedIndex],
-      bottomNavigationBar: BottomNavigationBar(
+      // Tabs cross-fade with a slight zoom (220 ms); off with reduce motion.
+      body: AnimatedSwitcher(
+        duration: MediaQuery.of(context).disableAnimations
+            ? Duration.zero
+            : const Duration(milliseconds: 220),
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        transitionBuilder: (child, a) => FadeTransition(
+          opacity: a,
+          child: ScaleTransition(
+              scale: Tween(begin: 0.985, end: 1.0).animate(a), child: child),
+        ),
+        child: KeyedSubtree(
+            key: ValueKey(_selectedIndex), child: _screens[_selectedIndex]),
+      ),
+      bottomNavigationBar: FloatingNavBar(
         currentIndex: _selectedIndex,
         onTap: _onItemTapped,
-        type: BottomNavigationBarType.fixed,
-        backgroundColor: Colors.black,
-        selectedItemColor: Colors.teal,
-        unselectedItemColor: Colors.grey,
-        showUnselectedLabels: true,
         items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: "Home"),
-          BottomNavigationBarItem(
-              icon: Icon(Icons.shopping_cart), label: "Order"),
-          BottomNavigationBarItem(
-              icon: Icon(Icons.attach_money), label: "Cash"),
-          BottomNavigationBarItem(
-              icon: Icon(Icons.assignment_return), label: "Return"),
-          BottomNavigationBarItem(icon: Icon(Icons.person), label: "Profile"),
+          NavItem(
+              icon: Icons.home_outlined,
+              activeIcon: Icons.home_rounded,
+              label: "Home"),
+          NavItem(
+              icon: Icons.shopping_cart_outlined,
+              activeIcon: Icons.shopping_cart_rounded,
+              label: "Order"),
+          NavItem(
+              icon: Icons.payments_outlined,
+              activeIcon: Icons.payments_rounded,
+              label: "Cash"),
+          NavItem(
+              icon: Icons.assignment_return_outlined,
+              activeIcon: Icons.assignment_return_rounded,
+              label: "Return"),
+          NavItem(
+              icon: Icons.person_outline,
+              activeIcon: Icons.person_rounded,
+              label: "Profile"),
         ],
       ),
     );
@@ -167,6 +195,12 @@ class _OverviewScreenState extends State<OverviewScreen>
   static const _notificationCheckGap = Duration(minutes: 5);
   final Set<int> _selectedTxIds = {};
   List<Map<String, dynamic>> _transactions = [];
+  bool _transactionsLoaded =
+      false; // first local read done (skeleton until then)
+
+  /// Last list from the server, shown at once when the bell dropdown opens.
+  /// Null until the first successful check.
+  List<Map<String, dynamic>>? _notifications;
 
   @override
   void initState() {
@@ -204,7 +238,12 @@ class _OverviewScreenState extends State<OverviewScreen>
       return;
     }
     if (!mounted) return;
-    setState(() => _unreadNotifications = res['unread'] as int? ?? 0);
+    setState(() {
+      _unreadNotifications = res['unread'] as int? ?? 0;
+      _notifications = List<Map<String, dynamic>>.from(
+          (res['notifications'] as List)
+              .map((n) => Map<String, dynamic>.from(n)));
+    });
     await LocalNotifier.alertNew(res['notifications'] as List);
   }
 
@@ -273,11 +312,11 @@ class _OverviewScreenState extends State<OverviewScreen>
           child: AlertDialog(
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            backgroundColor: Colors.white,
-            title: const Text(
+            backgroundColor: AppColors.surface,
+            title: Text(
               "Syncing Data",
-              style:
-                  TextStyle(fontWeight: FontWeight.bold, color: Colors.black),
+              style: TextStyle(
+                  fontWeight: FontWeight.w600, color: AppColors.textPrimary),
             ),
             content: ValueListenableBuilder<String?>(
                 valueListenable: errorMessage,
@@ -313,20 +352,20 @@ class _OverviewScreenState extends State<OverviewScreen>
                         Container(
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                              color: Colors.red.shade50,
+                              color: AppColors.redSoft,
                               borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Colors.red.shade200)),
+                              border: Border.all(color: AppColors.redLine)),
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Icon(Icons.error_outline,
-                                  color: Colors.red, size: 20),
+                              Icon(Icons.error_outline,
+                                  color: AppColors.red, size: 20),
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
                                   errorTxt,
-                                  style: const TextStyle(
-                                      color: Colors.red, fontSize: 13),
+                                  style: TextStyle(
+                                      color: AppColors.red, fontSize: 13),
                                 ),
                               ),
                             ],
@@ -351,10 +390,10 @@ class _OverviewScreenState extends State<OverviewScreen>
 
                     return TextButton(
                       onPressed: () => Navigator.pop(context),
-                      child: const Text("Close",
+                      child: Text("Close",
                           style: TextStyle(
-                              color: Colors.teal,
-                              fontWeight: FontWeight.bold)),
+                              color: AppColors.brand,
+                              fontWeight: FontWeight.w600)),
                     );
                   })
             ],
@@ -367,22 +406,25 @@ class _OverviewScreenState extends State<OverviewScreen>
   Widget _buildSyncRow(String title, int? status) {
     Widget icon;
     if (status == null || status == 0) {
-      icon = const SizedBox(
+      icon = SizedBox(
           width: 20,
           height: 20,
-          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.teal));
+          child: CircularProgressIndicator(
+              strokeWidth: 2, color: AppColors.brand));
     } else if (status == 1) {
-      icon = const Icon(Icons.check_circle, color: Colors.green, size: 24);
+      icon = Icon(Icons.check_circle, color: AppColors.green, size: 24);
     } else {
-      icon = const Icon(Icons.cancel, color: Colors.red, size: 24);
+      icon = Icon(Icons.cancel, color: AppColors.red, size: 24);
     }
 
     return Row(
       children: [
         icon,
         const SizedBox(width: 16),
-        Text(title,
-            style: const TextStyle(fontSize: 16, color: Colors.black87)),
+        Expanded(
+          child: Text(title,
+              style: TextStyle(fontSize: 16, color: AppColors.textPrimary)),
+        ),
       ],
     );
   }
@@ -393,19 +435,16 @@ class _OverviewScreenState extends State<OverviewScreen>
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text("InValid Access",
-            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red)),
+        title: Text("InValid Access",
+            style:
+                TextStyle(fontWeight: FontWeight.w600, color: AppColors.red)),
         content: const Text(
             "Your access is invalid. The server configuration has been changed."),
         actions: [
           ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.black,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10)),
-            ),
+            style: AppButtons.primary,
             onPressed: () => Navigator.pop(ctx),
-            child: const Text("OK", style: TextStyle(color: Colors.white)),
+            child: const Text("OK"),
           )
         ],
       ),
@@ -419,8 +458,8 @@ class _OverviewScreenState extends State<OverviewScreen>
     final errorMessage = ValueNotifier<String?>(null);
 
     if (mounted && showDialog) {
-      _showSyncDialog(context, customerStatus, productStatus,
-          vendorGroupStatus, errorMessage);
+      _showSyncDialog(context, customerStatus, productStatus, vendorGroupStatus,
+          errorMessage);
     }
 
     /// ------------------- CUSTOMERS -------------------
@@ -580,6 +619,9 @@ class _OverviewScreenState extends State<OverviewScreen>
     } catch (e) {
       debugPrint('Error loading transactions: $e');
     }
+    if (mounted && !_transactionsLoaded) {
+      setState(() => _transactionsLoaded = true); // skeleton off, even on error
+    }
   }
 
   Future<void> _uploadSelected() async {
@@ -646,13 +688,12 @@ class _OverviewScreenState extends State<OverviewScreen>
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel', style: TextStyle(color: Colors.red)),
+              child: Text('Cancel', style: TextStyle(color: AppColors.red)),
             ),
             ElevatedButton(
               onPressed: () => Navigator.pop(ctx, true),
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
-              child:
-                  const Text('Proceed', style: TextStyle(color: Colors.white)),
+              style: AppButtons.primary,
+              child: const Text('Proceed'),
             ),
           ],
         ),
@@ -697,7 +738,9 @@ class _OverviewScreenState extends State<OverviewScreen>
   }
 
   Future<void> _exportTransactions(List<int> ids) async {
-    if (ids.isEmpty) {
+    // CSV layout lives in TransactionExport (shared with Settings).
+    final csvText = await TransactionExport.buildCsv(ids);
+    if (csvText == null) {
       if (mounted) {
         UiUtils.showBeautifulSnackBar(context, "No transactions to export",
             isSuccess: false);
@@ -705,100 +748,11 @@ class _OverviewScreenState extends State<OverviewScreen>
       return;
     }
 
-    // Same payload the upload sends, so the file matches what the server gets.
-    final List<Map<String, dynamic>> dataList = [];
-    for (final id in ids) {
-      final payload = await ApiService.buildTransactionPayload(id);
-      if (payload != null) dataList.add(payload);
-    }
-
-    if (dataList.isEmpty) return;
-
-    final vendorGroupNames = {
-      for (final g in await AppDatabase.getVendorGroups())
-        g['VendorGroupID']: g['Name']?.toString() ?? '',
-    };
-
-    // Salesman who took each transaction. Rows from before this was recorded
-    // fall back to the logged-in user (the only user whose rows are listed).
-    final prefs = await SharedPreferences.getInstance();
-    final meId = prefs.getString('userId') ?? '';
-    final meName = prefs.getString('username') ?? '';
-    final ownerRows = await (await AppDatabase.init()).query('"Transaction"',
-        columns: ['TransactionID', 'UserID', 'UserName'],
-        where: 'TransactionID IN (${List.filled(ids.length, '?').join(',')})',
-        whereArgs: ids);
-    final owners = {
-      for (final r in ownerRows)
-        r['TransactionID']: (
-          (r['UserID'] as String?)?.isNotEmpty == true ? r['UserID'] : meId,
-          (r['UserID'] as String?)?.isNotEmpty == true ? r['UserName'] : meName,
-        ),
-    };
-
-    // Quotes a value when it holds a comma, quote or line break (standard CSV).
-    String csv(Object? v) {
-      final s = (v ?? '').toString();
-      return RegExp(r'[",\r\n]').hasMatch(s)
-          ? '"${s.replaceAll('"', '""')}"'
-          : s;
-    }
-
-    final StringBuffer csvData = StringBuffer();
-    // New columns go at the end so the older column positions don't move.
-    csvData.writeln(
-        "clientId,date,customerId,type,remarks,totalAmount,productId,batchNo,qty,unitPrice,detailTotalAmount,vendorGroupId,vendorGroupName,userId,userName");
-
-    for (final data in dataList) {
-      // Local time for people reading the sheet; the upload itself sends UTC.
-      final date = DateTime.parse(data['date']).toLocal().toIso8601String();
-      final vendorGroupId = data['vendorGroupId'];
-      final head = [
-        data['clientId'],
-        date,
-        data['customerId'],
-        data['type'],
-        data['remarks'],
-        data['totalAmount'],
-      ].map(csv).join(',');
-      final owner = owners[data['clientId']] ?? (meId, meName);
-      final tail = [
-        vendorGroupId,
-        vendorGroupNames[vendorGroupId],
-        owner.$1,
-        owner.$2,
-      ].map(csv).join(',');
-
-      final details = data['transactionDetails'] as List;
-      if (details.isEmpty) {
-        csvData.writeln("$head,,,,,,$tail");
-      } else {
-        for (final d in details) {
-          final line = [
-            d['productId'],
-            d['batchNo'],
-            d['qty'],
-            d['unitPrice'],
-            d['totalAmount'],
-          ].map(csv).join(',');
-          csvData.writeln("$head,$line,$tail");
-        }
-      }
-    }
-
     try {
-      final directory = await getTemporaryDirectory();
-      final String fileName =
-          "Exported_Transactions_${DateTime.now().millisecondsSinceEpoch}.csv";
-      final String path = "${directory.path}/$fileName";
-      final File file = File(path);
-      await file.writeAsString(csvData.toString());
-
+      if (!mounted) return;
+      // Saves to Downloads, shows a toast with the location, opens share.
+      await TransactionExport.saveAndShare(context, csvText);
       if (mounted) {
-        await Share.shareXFiles(
-          [XFile(path)],
-          text: 'Transactions CSV Export',
-        );
         setState(() {
           _selectionMode = false;
           _selectedTxIds.clear();
@@ -809,6 +763,24 @@ class _OverviewScreenState extends State<OverviewScreen>
         UiUtils.showBeautifulSnackBar(context, "Export failed: $e",
             isSuccess: false);
       }
+    }
+  }
+
+  void _prevDay() => setState(
+      () => _selectedDate = _selectedDate.subtract(const Duration(days: 1)));
+
+  void _nextDay() => setState(
+      () => _selectedDate = _selectedDate.add(const Duration(days: 1)));
+
+  Future<void> _pickDate() async {
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2101),
+    );
+    if (picked != null && picked != _selectedDate) {
+      setState(() => _selectedDate = picked);
     }
   }
 
@@ -883,18 +855,32 @@ class _OverviewScreenState extends State<OverviewScreen>
     final date = order['date'] as DateTime;
     final town = order['town'] ?? '';
     final total = (order['total'] ?? 0) as num;
+    // Per-type tint for the chip (Order / Cash / Return / Draft).
+    final (Color typeFg, Color typeBg) = switch (type) {
+      'Cash' => (AppColors.green, AppColors.greenSoft),
+      'Return' => (AppColors.red, AppColors.redSoft),
+      'Draft' => (AppColors.orange, AppColors.orangeSoft),
+      _ => (AppColors.brand, AppColors.brandSoft),
+    };
     return Container(
-      margin: const EdgeInsets.only(bottom: 14),
+      margin: const EdgeInsets.only(bottom: 12),
       child: Material(
-        elevation: isSelected ? 10 : 4,
-        borderRadius: BorderRadius.circular(18),
-        child: Container(
+        type: MaterialType.transparency,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          // Glass card; the selected one gets a brand rim.
           decoration: BoxDecoration(
-            color:
-                isSelected ? Colors.teal.withValues(alpha: 0.08) : Colors.white,
-            borderRadius: BorderRadius.circular(18),
-            border:
-                isSelected ? Border.all(color: Colors.teal, width: 2) : null,
+            color: isSelected ? AppColors.brandSoft : AppColors.glassFill,
+            borderRadius: BorderRadius.circular(AppRadius.lg),
+            border: Border.all(
+                color: isSelected ? AppColors.brand : AppColors.glassBorder,
+                width: isSelected ? 1.6 : 1),
+            boxShadow: [
+              BoxShadow(
+                  color: AppColors.shadow,
+                  blurRadius: 12,
+                  offset: const Offset(0, 4)),
+            ],
           ),
           padding: const EdgeInsets.all(14),
           child: Row(
@@ -906,7 +892,8 @@ class _OverviewScreenState extends State<OverviewScreen>
                     isSelected
                         ? Icons.check_circle
                         : Icons.radio_button_unchecked,
-                    color: isSelected ? Colors.teal : Colors.grey,
+                    color:
+                        isSelected ? AppColors.brand : AppColors.textSecondary,
                     size: 26,
                   ),
                 )
@@ -916,151 +903,70 @@ class _OverviewScreenState extends State<OverviewScreen>
                 child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(children: [
+                      Wrap(spacing: 8, runSpacing: 6, children: [
                         Container(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 10, vertical: 4),
                           decoration: BoxDecoration(
-                            color:
-                                type == 'Draft' ? Colors.orange : Colors.black,
-                            borderRadius: BorderRadius.circular(6),
+                            color: typeBg,
+                            borderRadius: BorderRadius.circular(AppRadius.pill),
                           ),
                           child: Text(type,
-                              style: const TextStyle(
-                                  color: Colors.white, fontSize: 12)),
+                              style: TextStyle(
+                                  color: typeFg,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600)),
                         ),
-                        const SizedBox(width: 8),
                         if (uploaded)
                           Container(
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 10, vertical: 4),
                             decoration: BoxDecoration(
-                                color: Colors.green,
+                                color: AppColors.green,
                                 borderRadius: BorderRadius.circular(6)),
-                            child: const Text("Uploaded",
+                            child: Text("Uploaded",
                                 style: TextStyle(
-                                    color: Colors.white, fontSize: 12)),
+                                    color: AppColors.onBrand, fontSize: 12)),
                           ),
                         if (uploadFailed)
                           Container(
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 8, vertical: 4),
-                            margin: const EdgeInsets.only(left: 8),
                             decoration: BoxDecoration(
-                                color: Colors.red.shade100,
+                                color: AppColors.redSoft,
                                 borderRadius: BorderRadius.circular(6)),
-                            child: const Text("Upload Failed",
-                                style:
-                                    TextStyle(color: Colors.red, fontSize: 11)),
+                            child: Text("Upload Failed",
+                                style: TextStyle(
+                                    color: AppColors.red, fontSize: 11)),
                           ),
                       ]),
                       const SizedBox(height: 10),
                       Text(order['customer'].toString().toUpperCase(),
                           style: const TextStyle(
-                              fontSize: 18, fontWeight: FontWeight.bold)),
+                              fontSize: 18, fontWeight: FontWeight.w600)),
                       const SizedBox(height: 6),
                       Text("ID: $txnId | $town | ${_shortDate(date)}",
-                          style: const TextStyle(color: Colors.grey)),
+                          style: TextStyle(color: AppColors.textSecondary)),
                     ]),
               ),
+              const SizedBox(width: 8),
               Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                 Text(
                   "Rs.${(total).toStringAsFixed(0)}",
                   style: const TextStyle(
-                    fontWeight: FontWeight.bold,
+                    fontWeight: FontWeight.w600,
                     fontSize: 16,
                   ),
                 ),
                 const SizedBox(height: 8),
-                const Text("AMOUNT",
-                    style: TextStyle(color: Colors.grey, fontSize: 11)),
+                Text("AMOUNT",
+                    style: TextStyle(
+                        color: AppColors.textSecondary, fontSize: 11)),
               ])
             ],
           ),
         ),
       ),
-    );
-  }
-
-  void _showClearDialog() {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return Dialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  Icons.warning_amber_rounded,
-                  size: 50,
-                  color: Colors.orange,
-                ),
-                const SizedBox(height: 15),
-                const Text(
-                  "Clear Data",
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                const Text(
-                  "Are you sure you want to delete all transactions?",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 15),
-                ),
-                const SizedBox(height: 25),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                      ),
-                      onPressed: () {
-                        Navigator.pop(context);
-                      },
-                      child: const Text("Cancel",
-                          style: TextStyle(color: Colors.white)),
-                    ),
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.red,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                      ),
-                      onPressed: () async {
-                        await AppDatabase.clearTransactions();
-                        await _loadTransactions();
-
-                        Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text("Data cleared successfully"),
-                          ),
-                        );
-
-                        setState(() {});
-                      },
-                      child: const Text("Delete",
-                          style: TextStyle(color: Colors.white)),
-                    ),
-                  ],
-                )
-              ],
-            ),
-          ),
-        );
-      },
     );
   }
 
@@ -1100,9 +1006,8 @@ class _OverviewScreenState extends State<OverviewScreen>
         MaterialPageRoute(builder: (_) => ReturnScreen(transactionId: id)),
       );
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Edit for "$type" not implemented yet.')),
-      );
+      AppToast.show(context, 'Edit for "$type" not implemented yet.',
+          type: ToastType.warning);
     }
 
     await _loadTransactions();
@@ -1115,8 +1020,7 @@ class _OverviewScreenState extends State<OverviewScreen>
   Future<void> _showTransactionDetailsDialog(int transactionId) async {
     final rows = await AppDatabase.getTransactionWithDetails(transactionId);
     if (rows.isEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Transaction not found')));
+      AppToast.show(context, 'Transaction not found', type: ToastType.error);
       return;
     }
 
@@ -1159,7 +1063,7 @@ class _OverviewScreenState extends State<OverviewScreen>
           child: Container(
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(20),
-              color: Colors.white,
+              color: AppColors.surface,
             ),
             padding: const EdgeInsets.all(16),
             child: SingleChildScrollView(
@@ -1171,14 +1075,14 @@ class _OverviewScreenState extends State<OverviewScreen>
                     children: [
                       CircleAvatar(
                         radius: 22,
-                        backgroundColor: Colors.teal.shade100,
+                        backgroundColor: AppColors.brandSoft,
                         child: Icon(
                           type == 'Cash'
                               ? Icons.attach_money
                               : type == 'Return'
                                   ? Icons.assignment_return
                                   : Icons.shopping_cart,
-                          color: Colors.teal.shade700,
+                          color: AppColors.brandDark,
                           size: 26,
                         ),
                       ),
@@ -1191,12 +1095,12 @@ class _OverviewScreenState extends State<OverviewScreen>
                               customerName.toUpperCase(),
                               style: const TextStyle(
                                 fontSize: 18,
-                                fontWeight: FontWeight.bold,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
                             Text(
                               "$type • ${_shortDate(date)}",
-                              style: const TextStyle(color: Colors.grey),
+                              style: TextStyle(color: AppColors.textSecondary),
                             ),
                           ],
                         ),
@@ -1206,7 +1110,7 @@ class _OverviewScreenState extends State<OverviewScreen>
                   const SizedBox(height: 16),
                   Container(
                     decoration: BoxDecoration(
-                      color: Colors.teal.shade50,
+                      color: AppColors.brandSoft,
                       borderRadius: BorderRadius.circular(12),
                     ),
                     padding: const EdgeInsets.all(12),
@@ -1218,14 +1122,21 @@ class _OverviewScreenState extends State<OverviewScreen>
                             Text(
                               type == 'Cash' ? 'Cash Amount' : 'Total Amount',
                               style: const TextStyle(
-                                fontWeight: FontWeight.bold,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
-                            Text(
-                              'Rs.${(type == 'Cash' ? cashAmount : totalAmount).toStringAsFixed(0)}',
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.teal),
+                            const SizedBox(width: 8),
+                            Flexible(
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerRight,
+                                child: Text(
+                                  'Rs.${(type == 'Cash' ? cashAmount : totalAmount).toStringAsFixed(0)}',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      color: AppColors.brand),
+                                ),
+                              ),
                             ),
                           ],
                         ),
@@ -1236,12 +1147,13 @@ class _OverviewScreenState extends State<OverviewScreen>
                             children: [
                               const Text(
                                 'Remarks: ',
-                                style: TextStyle(fontWeight: FontWeight.bold),
+                                style: TextStyle(fontWeight: FontWeight.w600),
                               ),
                               Expanded(
                                 child: Text(
                                   remarks.toString(),
-                                  style: const TextStyle(color: Colors.black87),
+                                  style:
+                                      TextStyle(color: AppColors.textPrimary),
                                 ),
                               ),
                             ],
@@ -1254,18 +1166,18 @@ class _OverviewScreenState extends State<OverviewScreen>
                   const Text(
                     'Order Lines',
                     style: TextStyle(
-                      fontWeight: FontWeight.bold,
+                      fontWeight: FontWeight.w600,
                       fontSize: 16,
                     ),
                   ),
                   const Divider(),
                   if (lines.isEmpty)
-                    const Center(
+                    Center(
                       child: Padding(
-                        padding: EdgeInsets.all(12.0),
+                        padding: const EdgeInsets.all(12.0),
                         child: Text(
                           'No product lines',
-                          style: TextStyle(color: Colors.grey),
+                          style: TextStyle(color: AppColors.textSecondary),
                         ),
                       ),
                     )
@@ -1275,7 +1187,7 @@ class _OverviewScreenState extends State<OverviewScreen>
                       physics: const NeverScrollableScrollPhysics(),
                       itemCount: lines.length,
                       separatorBuilder: (_, __) =>
-                          const Divider(height: 12, color: Colors.grey),
+                          Divider(height: 12, color: AppColors.textSecondary),
                       itemBuilder: (context, i) {
                         final l = lines[i];
                         return ListTile(
@@ -1283,15 +1195,15 @@ class _OverviewScreenState extends State<OverviewScreen>
                           contentPadding: EdgeInsets.zero,
                           title: Text(
                             l['productName'].toString(),
-                            style: const TextStyle(fontWeight: FontWeight.w500),
+                            style: const TextStyle(fontWeight: FontWeight.w600),
                           ),
                           subtitle: Text(
                             'Qty: ${l['qty']}  |  Batch: ${l['batchNo'] ?? ''}',
-                            style: const TextStyle(color: Colors.grey),
+                            style: TextStyle(color: AppColors.textSecondary),
                           ),
                           trailing: Text(
                             'Rs.${l['totalPrice']}',
-                            style: const TextStyle(fontWeight: FontWeight.bold),
+                            style: const TextStyle(fontWeight: FontWeight.w600),
                           ),
                         );
                       },
@@ -1303,7 +1215,7 @@ class _OverviewScreenState extends State<OverviewScreen>
                       TextButton(
                         onPressed: () => Navigator.of(ctx).pop(),
                         style: TextButton.styleFrom(
-                          foregroundColor: Colors.grey[700],
+                          foregroundColor: AppColors.textSecondary,
                         ),
                         child: const Text('Close'),
                       ),
@@ -1348,20 +1260,14 @@ class _OverviewScreenState extends State<OverviewScreen>
                                 ),
                               );
                             } else {
-                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                                  content: Text(
-                                      'Edit for "$type" not implemented yet.')));
+                              AppToast.show(context,
+                                  'Edit for "$type" not implemented yet.',
+                                  type: ToastType.warning);
                             }
                             await _loadTransactions();
                             if (mounted) setState(() {});
                           },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.teal,
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                          ),
+                          style: AppButtons.primarySoft,
                           icon: const Icon(Icons.edit, size: 18),
                           label: const Text('Edit'),
                         ),
@@ -1408,114 +1314,84 @@ class _OverviewScreenState extends State<OverviewScreen>
           (t['type'] == 'Cash' ? ((t['total'] ?? 0) as num).toDouble() : 0.0),
     );
     return Scaffold(
-      backgroundColor: Colors.grey[100],
       appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              "Softifex",
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 0.5,
+        titleSpacing: 16,
+        title: FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                "Softifex",
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.5,
+                ),
               ),
-            ),
-            const SizedBox(height: 2),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(
-                color: _isOnline
-                    ? Colors.green.withValues(alpha: 0.2)
-                    : Colors.red.withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 6,
-                    height: 6,
-                    decoration: BoxDecoration(
-                      color: _isOnline ? Colors.greenAccent : Colors.redAccent,
-                      shape: BoxShape.circle,
+              const SizedBox(height: 2),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: _isOnline ? AppColors.greenSoft : AppColors.redSoft,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: _isOnline ? AppColors.green : AppColors.red,
+                        shape: BoxShape.circle,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 5),
-                  Text(
-                    _isOnline ? "Online" : "Offline",
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: _isOnline ? Colors.greenAccent : Colors.redAccent,
-                      fontWeight: FontWeight.w900,
+                    const SizedBox(width: 5),
+                    Text(
+                      _isOnline ? "Online" : "Offline",
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: _isOnline ? AppColors.green : AppColors.red,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
         actions: [
           if (!_selectionMode)
-            IconButton(
-              tooltip: "Notifications",
-              icon: Badge(
-                isLabelVisible: _unreadNotifications > 0,
-                label: Text('$_unreadNotifications'),
-                child: const Icon(Icons.notifications),
+            Builder(
+              builder: (bellContext) => IconButton(
+                tooltip: "Notifications",
+                icon: Badge(
+                  isLabelVisible: _unreadNotifications > 0,
+                  label: Text('$_unreadNotifications'),
+                  child: const Icon(Icons.notifications_none),
+                ),
+                onPressed: () {
+                  // Drop-down under the bell: 5 latest + "View all".
+                  final box = bellContext.findRenderObject() as RenderBox;
+                  final anchor = box.localToGlobal(Offset.zero) & box.size;
+                  showNotificationDropdown(
+                    context: context,
+                    anchor: anchor,
+                    initial: _notifications,
+                    onChanged: (items, unread) {
+                      if (!mounted) return;
+                      setState(() {
+                        _notifications = items;
+                        _unreadNotifications = unread;
+                      });
+                    },
+                  );
+                },
               ),
-              onPressed: () async {
-                // The screen returns its unread count: no extra API call.
-                final unread = await Navigator.push<int>(
-                  context,
-                  MaterialPageRoute(builder: (_) => const NotificationScreen()),
-                );
-                if (unread != null && mounted) {
-                  setState(() => _unreadNotifications = unread);
-                }
-              },
-            ),
-          if (!_selectionMode)
-            IconButton(
-              icon: const Icon(Icons.chevron_left),
-              tooltip: "Previous Day",
-              onPressed: () {
-                setState(() {
-                  _selectedDate =
-                      _selectedDate.subtract(const Duration(days: 1));
-                });
-              },
-            ),
-          if (!_selectionMode)
-            IconButton(
-              icon: const Icon(Icons.calendar_month),
-              tooltip: "Select Date",
-              onPressed: () async {
-                final DateTime? picked = await showDatePicker(
-                  context: context,
-                  initialDate: _selectedDate,
-                  firstDate: DateTime(2000),
-                  lastDate: DateTime(2101),
-                );
-                if (picked != null && picked != _selectedDate) {
-                  setState(() {
-                    _selectedDate = picked;
-                  });
-                }
-              },
-            ),
-          if (!_selectionMode)
-            IconButton(
-              icon: const Icon(Icons.chevron_right),
-              tooltip: "Next Day",
-              onPressed: () {
-                setState(() {
-                  _selectedDate = _selectedDate.add(const Duration(days: 1));
-                });
-              },
             ),
           if (!_selectionMode)
             IconButton(
@@ -1529,18 +1405,27 @@ class _OverviewScreenState extends State<OverviewScreen>
 
           /// Select All Button (only when selecting)
           if (_selectionMode)
-            TextButton(
-              onPressed: () {
-                setState(() {
-                  _selectedTxIds
-                      .addAll(filtered.map((t) => t['transactionId'] as int));
-                });
-              },
-              child: const Text(
-                "Select All",
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
+            // Tonal pill: readable on light and dark app bars.
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  setState(() {
+                    _selectedTxIds
+                        .addAll(filtered.map((t) => t['transactionId'] as int));
+                  });
+                },
+                // Same raised look as every other button, in pill shape.
+                style: AppButtons.primarySoft.merge(ElevatedButton.styleFrom(
+                  minimumSize: const Size(0, 36),
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  shape: const StadiumBorder(),
+                )),
+                icon: const Icon(Icons.select_all_rounded, size: 18),
+                label: Text(
+                  "All (${_selectedTxIds.length})",
+                  style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
               ),
             ),
@@ -1560,15 +1445,13 @@ class _OverviewScreenState extends State<OverviewScreen>
                     actions: [
                       TextButton(
                         onPressed: () => Navigator.pop(ctx, false),
-                        child: const Text('Cancel',
-                            style: TextStyle(color: Colors.grey)),
+                        child: Text('Cancel',
+                            style: TextStyle(color: AppColors.textSecondary)),
                       ),
                       ElevatedButton(
                         onPressed: () => Navigator.pop(ctx, true),
-                        style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.teal),
-                        child: const Text('Sync',
-                            style: TextStyle(color: Colors.white)),
+                        style: AppButtons.primary,
+                        child: const Text('Sync'),
                       ),
                     ],
                   ),
@@ -1622,8 +1505,8 @@ class _OverviewScreenState extends State<OverviewScreen>
                     actions: [
                       TextButton(
                         onPressed: () => Navigator.pop(ctx),
-                        child: const Text('Cancel',
-                            style: TextStyle(color: Colors.grey)),
+                        child: Text('Cancel',
+                            style: TextStyle(color: AppColors.textSecondary)),
                       ),
                       ElevatedButton(
                         onPressed: () async {
@@ -1637,10 +1520,8 @@ class _OverviewScreenState extends State<OverviewScreen>
                           });
                           await _loadTransactions();
                         },
-                        style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.red),
-                        child: const Text('Delete',
-                            style: TextStyle(color: Colors.white)),
+                        style: AppButtons.danger,
+                        child: const Text('Delete'),
                       ),
                     ],
                   ),
@@ -1673,7 +1554,7 @@ class _OverviewScreenState extends State<OverviewScreen>
       floatingActionButton: _isUploading
           ? FloatingActionButton(
               onPressed: () {},
-              backgroundColor: Colors.grey,
+              backgroundColor: AppColors.textSecondary,
               child: SizedBox(
                 width: 56,
                 height: 56,
@@ -1681,78 +1562,41 @@ class _OverviewScreenState extends State<OverviewScreen>
                   alignment: Alignment.center,
                   children: [
                     CircularProgressIndicator(
-                        value: _uploadProgress, color: Colors.white),
-                    const Icon(Icons.cloud_upload, color: Colors.white),
+                        value: _uploadProgress, color: AppColors.onBrand),
+                    Icon(Icons.cloud_upload, color: AppColors.onBrand),
                   ],
                 ),
               ),
             )
           : (showUploadFab
               ? FloatingActionButton.extended(
-                  backgroundColor: Colors.green,
-                  icon: const Icon(Icons.cloud_upload, color: Colors.white),
-                  label: const Text("Upload",
-                      style: TextStyle(color: Colors.white)),
+                  backgroundColor: AppColors.green,
+                  icon: Icon(Icons.cloud_upload, color: AppColors.onBrand),
+                  label: const Text("Upload"),
                   onPressed: _uploadSelected,
                 )
               : null),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0),
-            child: Row(children: [
-              Expanded(
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text("Overview",
-                          style: TextStyle(
-                              fontSize: 34, fontWeight: FontWeight.w600)),
-                      const SizedBox(height: 6),
-                      Text(_formatDayDate(_selectedDate),
-                          style: const TextStyle(
-                              fontSize: 16, color: Colors.grey)),
-                      const SizedBox(height: 12),
-                      Row(children: [
-                        const Icon(Icons.shopping_bag_outlined, size: 18),
-                        const SizedBox(width: 6),
-                        Text("Rs.$orderTotal"),
-                        const SizedBox(width: 20),
-                        const Icon(Icons.attach_money, size: 18),
-                        const SizedBox(width: 6),
-                        Text("Rs.$cashTotal"),
-                      ]),
-                    ]),
-              ),
-              Column(children: [
-                ElevatedButton(
-                    onPressed: () {
-                      final ids = filtered
-                          .map((e) => e['transactionId'] as int)
-                          .toList();
-                      _exportTransactions(ids);
-                    },
-                    style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8))),
-                    child: const Text("Export",
-                        style: TextStyle(color: Colors.white))),
-                const SizedBox(height: 10),
-                ElevatedButton(
-                    onPressed: () {
-                      _showClearDialog();
-                    },
-                    style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.red,
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8))),
-                    child: const Text("Clear",
-                        style: TextStyle(color: Colors.white))),
-              ])
-            ]),
+          OverviewHero(
+            dateLabel: _formatDayDate(_selectedDate),
+            orderTotal: orderTotal,
+            cashTotal: cashTotal,
+            entries: filteredByDate.length,
+            // Drafts are not meant to be uploaded, so they are not counted.
+            notSynced: filteredByDate
+                .where(
+                    (t) => t['type'] != 'Draft' && t['syncStatus'] != 'Synced')
+                .length,
+            onExport: () {
+              final ids =
+                  filtered.map((e) => e['transactionId'] as int).toList();
+              _exportTransactions(ids);
+            },
+            onPrevDay: _prevDay,
+            onNextDay: _nextDay,
+            onPickDate: _pickDate,
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1775,33 +1619,39 @@ class _OverviewScreenState extends State<OverviewScreen>
           ),
           const SizedBox(height: 12),
           Expanded(
-            child: filtered.isEmpty
-                ? const Center(
-                    child: Text("No Orders Yet",
-                        style: TextStyle(color: Colors.grey)))
-                : ListView.builder(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    itemCount: filtered.length,
-                    itemBuilder: (context, i) {
-                      final order = filtered[i];
-                      final txnId = order['transactionId'] as int;
-                      return GestureDetector(
-                        onLongPress: () => setState(() {
-                          _selectionMode = true;
-                          _selectedTxIds.add(txnId);
-                        }),
-                        onTap: () {
-                          if (_selectionMode) {
-                            _toggleSelection(txnId);
-                          } else {
-                            _showTransactionDetailsDialog(txnId);
-                          }
+            child: !_transactionsLoaded
+                ? const TransactionListSkeleton()
+                : filtered.isEmpty
+                    ? Center(
+                        child: Text("No Orders Yet",
+                            style: TextStyle(color: AppColors.textSecondary)))
+                    : ListView.builder(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                        itemCount: filtered.length,
+                        itemBuilder: (context, i) {
+                          final order = filtered[i];
+                          final txnId = order['transactionId'] as int;
+                          return FadeSlideIn(
+                            key: ValueKey(txnId),
+                            index: i,
+                            child: Pressable(
+                              onLongPress: () => setState(() {
+                                _selectionMode = true;
+                                _selectedTxIds.add(txnId);
+                              }),
+                              onTap: () {
+                                if (_selectionMode) {
+                                  _toggleSelection(txnId);
+                                } else {
+                                  _showTransactionDetailsDialog(txnId);
+                                }
+                              },
+                              child: _buildOrderCard(order),
+                            ),
+                          );
                         },
-                        child: _buildOrderCard(order),
-                      );
-                    },
-                  ),
+                      ),
           ),
         ],
       ),

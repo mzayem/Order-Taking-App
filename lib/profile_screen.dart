@@ -1,5 +1,14 @@
 import 'package:dmc/login_screen.dart';
 import 'package:flutter/material.dart';
+import 'package:dmc/widgets/app_toast.dart';
+import 'package:dmc/about_screen.dart';
+import 'package:dmc/activity_screen.dart';
+import 'package:dmc/services/app_log.dart';
+import 'package:dmc/settings_screen.dart';
+import 'package:dmc/theme/app_theme.dart';
+import 'package:dmc/theme/theme_controller.dart';
+import 'package:dmc/widgets/logo_badge.dart';
+import 'package:dmc/widgets/skeleton.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -12,6 +21,7 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   String _username = "Loading...";
   String _town = "Loading...";
+  bool _loaded = false;
 
   @override
   void initState() {
@@ -21,8 +31,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _loadUserData() async {
     final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
 
     setState(() {
+      _loaded = true;
       _username = prefs.getString('username') ?? 'Unknown User';
 
       // assuming you saved towns like: [1,2,3] OR names
@@ -33,6 +45,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _logout(BuildContext context) async {
     final prefs = await SharedPreferences.getInstance();
+    await AppLog.info(LogCategory.auth, 'Signed out: $_username');
 
     // Session only: server setup (baseUrl, isUrlSaved, headerRef) stays.
     // Drafts go too, so the next user doesn't see this user's unfinished work.
@@ -46,7 +59,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
       'return_draft',
       'lastAlertedNotificationId',
       'lastDataRefresh', // next user loads their own towns' customers
-
     ]) {
       await prefs.remove(key);
     }
@@ -58,106 +70,163 @@ class _ProfileScreenState extends State<ProfileScreen> {
       (route) => false,
     );
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("You have been logged out.")),
-    );
+    AppToast.show(context, "You have been logged out.", type: ToastType.info);
   }
+
+  void _open(Widget screen) =>
+      Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey.shade100,
       appBar: AppBar(
         title: const Text("Profile"),
         centerTitle: true,
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-        elevation: 0,
       ),
       body: CustomScrollView(
         slivers: [
           SliverToBoxAdapter(
-            child: Column(
-              children: [
-                // 🔵 HEADER SECTION
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(vertical: 30),
-                  decoration: const BoxDecoration(
-                    color: Colors.black,
-                    borderRadius: BorderRadius.vertical(
-                      bottom: Radius.circular(30),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Column(
+                children: [
+                  // Header card: same navy gradient as the Home hero
+                  Container(
+                    padding: const EdgeInsets.symmetric(vertical: 28),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(AppRadius.lg),
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [AppColors.heroStart, AppColors.heroEnd],
+                      ),
+                    ),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: !_loaded
+                          ? const ProfileCardSkeleton()
+                          : Column(
+                              children: [
+                                const LogoBadge(size: 96),
+                                const SizedBox(height: 14),
+                                Text(
+                                  _username,
+                                  style: const TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: AppText.semibold,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  "Signed in",
+                                  style: TextStyle(
+                                      fontSize: 13, color: AppColors.heroMuted),
+                                ),
+                              ],
+                            ),
                     ),
                   ),
-                  child: Column(
-                    children: [
-                      // 🖼 LOGO (Replace with your asset)
-                      CircleAvatar(
-                        radius: 70,
-                        backgroundColor: Colors.white,
-                        child: Padding(
-                          padding: const EdgeInsets.all(8.0),
-                          child: Image.asset(
-                            'assets/images/splash.png', // 🔥 Add your logo here
-                            fit: BoxFit.contain,
-                          ),
-                        ),
-                      ),
 
-                      const SizedBox(height: 15),
+                  const SizedBox(height: 20),
 
-                      // 👤 Username
-                      Text(
-                        _username,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-
-                      const SizedBox(height: 5),
-
-                      // 📍 Town
-                      // Text(
-                      //   _town,
-                      //   style: const TextStyle(
-                      //     color: Colors.white70,
-                      //     fontSize: 16,
-                      //   ),
-                      // ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 30),
-
-                // 🧾 INFO CARD
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: Card(
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(15),
-                    ),
-                    elevation: 4,
+                  // Info card
+                  Card(
+                    clipBehavior: Clip.antiAlias,
                     child: Column(
                       children: [
                         ListTile(
-                          leading: const Icon(Icons.person),
+                          leading: Icon(Icons.person_outline,
+                              color: AppColors.brand),
                           title: const Text("Username"),
                           subtitle: Text(_username),
                         ),
-                        const Divider(height: 1),
+                        const Divider(height: 1, indent: 56),
                         ListTile(
-                          leading: const Icon(Icons.location_city),
+                          leading: Icon(Icons.location_city_outlined,
+                              color: AppColors.brand),
                           title: const Text("Town"),
                           subtitle: Text(_town),
                         ),
                       ],
                     ),
                   ),
-                ),
-              ],
+
+                  const SizedBox(height: 16),
+
+                  // Appearance (like the ERP's light / dark / system setting)
+                  ListenableBuilder(
+                    listenable: ThemeController.instance,
+                    builder: (context, _) {
+                      final theme = ThemeController.instance;
+                      return Card(
+                        clipBehavior: Clip.antiAlias,
+                        child: Column(
+                          children: [
+                            SwitchListTile(
+                              secondary: Icon(Icons.brightness_auto_outlined,
+                                  color: AppColors.brand),
+                              title: const Text("Match system"),
+                              subtitle: const Text("Follow the phone's theme"),
+                              value: theme.followsSystem,
+                              onChanged: theme.setFollowSystem,
+                            ),
+                            const Divider(height: 1, indent: 56),
+                            SwitchListTile(
+                              secondary: Icon(Icons.dark_mode_outlined,
+                                  color: AppColors.brand),
+                              title: const Text("Dark mode"),
+                              value: theme.isDark,
+                              // Locked while following the system.
+                              onChanged:
+                                  theme.followsSystem ? null : theme.setDark,
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Activity + About
+                  Card(
+                    clipBehavior: Clip.antiAlias,
+                    child: Column(
+                      children: [
+                        ListTile(
+                          leading: Icon(Icons.history, color: AppColors.blue),
+                          title: const Text("Activity"),
+                          subtitle: const Text("Sync results and errors"),
+                          trailing: Icon(Icons.chevron_right,
+                              color: AppColors.textTertiary),
+                          onTap: () => _open(const ActivityScreen()),
+                        ),
+                        const Divider(height: 1, indent: 56),
+                        ListTile(
+                          leading:
+                              Icon(Icons.tune_rounded, color: AppColors.brand),
+                          title: const Text("Settings"),
+                          subtitle:
+                              const Text("Export and clear old transactions"),
+                          trailing: Icon(Icons.chevron_right,
+                              color: AppColors.textTertiary),
+                          onTap: () => _open(const SettingsScreen()),
+                        ),
+                        const Divider(height: 1, indent: 56),
+                        ListTile(
+                          leading: Icon(Icons.info_outline,
+                              color: AppColors.textSecondary),
+                          title: const Text("About"),
+                          trailing: Icon(Icons.chevron_right,
+                              color: AppColors.textTertiary),
+                          onTap: () => _open(const AboutScreen()),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           SliverFillRemaining(
@@ -166,21 +235,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
             child: Align(
               alignment: Alignment.bottomCenter,
               child: Padding(
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.all(16),
                 child: ElevatedButton.icon(
                   onPressed: () => _logout(context),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.red,
-                    foregroundColor: Colors.white,
-                    minimumSize: const Size(double.infinity, 55),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
+                          minimumSize: const Size(double.infinity, 52))
+                      .merge(AppButtons.dangerSoft),
                   icon: const Icon(Icons.logout),
                   label: const Text(
                     "Logout",
-                    style: TextStyle(fontSize: 18),
+                    style: TextStyle(fontSize: 16),
                   ),
                 ),
               ),

@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:dmc/theme/app_theme.dart';
 
 import 'services/api_service.dart';
+import 'widgets/notification_dropdown.dart'
+    show notificationStyle, sortNewestFirst;
+import 'widgets/skeleton.dart';
+import 'widgets/page_hero.dart';
 
 class NotificationScreen extends StatefulWidget {
   const NotificationScreen({super.key});
@@ -27,8 +32,9 @@ class _NotificationScreenState extends State<NotificationScreen> {
       _loading = false;
       _offline = res == null;
       if (res != null) {
-        _items = List<Map<String, dynamic>>.from(
-            (res['notifications'] as List).map((n) => Map<String, dynamic>.from(n)));
+        _items = sortNewestFirst(List<Map<String, dynamic>>.from(
+            (res['notifications'] as List)
+                .map((n) => Map<String, dynamic>.from(n))));
       }
     });
   }
@@ -48,14 +54,6 @@ class _NotificationScreenState extends State<NotificationScreen> {
     await ApiService.markNotificationRead();
   }
 
-  // Server types (NotificationType, lower-cased): info, success, warning, danger.
-  (IconData, Color) _style(String? type) => switch (type) {
-        'success' => (Icons.check_circle, Colors.green),
-        'warning' => (Icons.warning_amber_rounded, Colors.orange),
-        'danger' => (Icons.error, Colors.red),
-        _ => (Icons.info, Colors.teal),
-      };
-
   @override
   Widget build(BuildContext context) {
     final hasUnread = _items.any((n) => n['unread'] == true);
@@ -73,81 +71,88 @@ class _NotificationScreenState extends State<NotificationScreen> {
         }
       },
       child: Scaffold(
-      backgroundColor: Colors.grey[100],
-      appBar: AppBar(
-        title: const Text('Notifications'),
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-        actions: [
-          if (hasUnread)
-            TextButton(
-              onPressed: _markAllRead,
-              child: const Text('Mark all read',
-                  style: TextStyle(color: Colors.white)),
-            ),
-        ],
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _load,
-              child: _items.isEmpty
-                  ? ListView(children: [
-                      const SizedBox(height: 120),
-                      Center(
-                        child: Text(
-                          _offline
-                              ? 'Could not reach the server.\nPull down to retry.'
-                              : 'No notifications',
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(color: Colors.grey),
-                        ),
-                      ),
-                    ])
-                  : ListView.builder(
-                      padding: const EdgeInsets.all(12),
-                      itemCount: _items.length,
-                      itemBuilder: (context, i) {
-                        final n = _items[i];
-                        final unread = n['unread'] == true;
-                        final (icon, color) = _style(n['type']?.toString());
-                        return Card(
-                          margin: const EdgeInsets.only(bottom: 10),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12)),
-                          child: ListTile(
-                            onTap: () => _markRead(n),
-                            leading: Icon(icon, color: color),
-                            title: Text(
-                              n['title']?.toString() ?? '',
-                              style: TextStyle(
-                                  fontWeight: unread
-                                      ? FontWeight.bold
-                                      : FontWeight.normal),
-                            ),
-                            subtitle: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                if ((n['body'] ?? '').toString().isNotEmpty)
-                                  Padding(
-                                    padding: const EdgeInsets.only(top: 4),
-                                    child: Text(n['body'].toString()),
-                                  ),
-                                const SizedBox(height: 4),
-                                Text(n['date']?.toString() ?? '',
-                                    style: const TextStyle(
-                                        fontSize: 12, color: Colors.grey)),
-                              ],
-                            ),
-                            trailing: unread
-                                ? const Icon(Icons.circle,
-                                    size: 10, color: Colors.teal)
-                                : null,
+        appBar: AppBar(
+          title: const Text('Notifications'),
+          actions: [
+            if (hasUnread)
+              TextButton(
+                onPressed: _markAllRead,
+                child: const Text('Mark all read'),
+              ),
+          ],
+        ),
+        body: _loading
+            ? const TransactionListSkeleton(count: 7)
+            : RefreshIndicator(
+                onRefresh: _load,
+                child: _items.isEmpty
+                    ? ListView(children: [
+                        const SizedBox(height: 120),
+                        Center(
+                          child: Text(
+                            _offline
+                                ? 'Could not reach the server.\nPull down to retry.'
+                                : 'No notifications',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: AppColors.textSecondary),
                           ),
-                        );
-                      },
-                    ),
-            ),
+                        ),
+                      ])
+                    : ListView.builder(
+                        padding: const EdgeInsets.all(12),
+                        itemCount: _items.length + 1,
+                        itemBuilder: (context, i) {
+                          if (i == 0) {
+                            return PageHero(
+                              icon: Icons.notifications_active_outlined,
+                              title: 'Notifications',
+                              subtitle: hasUnread
+                                  ? 'You have unread messages'
+                                  : 'All caught up',
+                            );
+                          }
+                          final n = _items[i - 1];
+                          final unread = n['unread'] == true;
+                          final (icon, color) =
+                              notificationStyle(n['type']?.toString());
+                          return Card(
+                            margin: const EdgeInsets.only(bottom: 10),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                            child: ListTile(
+                              onTap: () => _markRead(n),
+                              leading: Icon(icon, color: color),
+                              title: Text(
+                                n['title']?.toString() ?? '',
+                                style: TextStyle(
+                                    fontWeight: unread
+                                        ? FontWeight.w600
+                                        : FontWeight.w400),
+                              ),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  if ((n['body'] ?? '').toString().isNotEmpty)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 4),
+                                      child: Text(n['body'].toString()),
+                                    ),
+                                  const SizedBox(height: 4),
+                                  Text(n['date']?.toString() ?? '',
+                                      style: TextStyle(
+                                          fontSize: 12,
+                                          color: AppColors.textSecondary)),
+                                ],
+                              ),
+                              trailing: unread
+                                  ? Icon(Icons.circle,
+                                      size: 10, color: AppColors.brand)
+                                  : null,
+                            ),
+                          );
+                        },
+                      ),
+              ),
       ),
     );
   }

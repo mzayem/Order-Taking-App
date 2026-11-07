@@ -1,5 +1,8 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:dmc/widgets/app_toast.dart';
+import 'package:dmc/theme/app_theme.dart';
+import 'package:dmc/widgets/brand_logo.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'login_screen.dart';
@@ -117,12 +120,8 @@ class _UrlSetupScreenState extends State<UrlSetupScreen> {
 
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Successfully connected with "$companyName"'),
-          backgroundColor: Colors.green,
-        ),
-      );
+      AppToast.show(context, 'Successfully connected with "$companyName"',
+          type: ToastType.success);
 
       await Future.delayed(const Duration(seconds: 1));
 
@@ -141,8 +140,7 @@ class _UrlSetupScreenState extends State<UrlSetupScreen> {
   }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message)));
+    AppToast.show(context, message, type: ToastType.error);
   }
 
   @override
@@ -154,13 +152,12 @@ class _UrlSetupScreenState extends State<UrlSetupScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
       body: Padding(
         padding: const EdgeInsets.all(30),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Image.asset('assets/images/splash.png', width: 200, height: 200),
+            const BrandLogo(width: 240),
             const SizedBox(height: 20),
             const Text("Setup App", style: TextStyle(fontSize: 28)),
             const SizedBox(height: 30),
@@ -176,12 +173,11 @@ class _UrlSetupScreenState extends State<UrlSetupScreen> {
             ElevatedButton(
               onPressed: isLoading ? null : saveUrl,
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.black,
-                minimumSize: const Size(double.infinity, 50),
-              ),
+                      minimumSize: const Size(double.infinity, 50))
+                  .merge(AppButtons.primary),
               child: isLoading
-                  ? const CircularProgressIndicator(color: Colors.white)
-                  : const Text("Save", style: TextStyle(color: Colors.white)),
+                  ? CircularProgressIndicator(color: AppColors.onBrand)
+                  : const Text("Save"),
             )
           ],
         ),

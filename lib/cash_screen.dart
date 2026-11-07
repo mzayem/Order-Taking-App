@@ -1,6 +1,10 @@
 // lib/screens/cash_screen.dart
 
 import 'package:flutter/material.dart';
+import 'package:dmc/widgets/app_toast.dart';
+import 'package:dmc/theme/app_theme.dart';
+import 'package:dmc/widgets/page_hero.dart';
+import 'package:dmc/widgets/skeleton.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -23,6 +27,8 @@ class _CashScreenState extends State<CashScreen> {
   final TextEditingController _remarksController = TextEditingController();
 
   final FocusNode _amountFocusNode = FocusNode();
+  final FocusNode _remarksFocusNode = FocusNode();
+  FocusNode? _customerFocusNode; // fast entry: back here after each save
 
   String? _selectedCustomer;
   int? _selectedCustomerId;
@@ -156,9 +162,8 @@ class _CashScreenState extends State<CashScreen> {
   Future<void> _saveCashPayment() async {
     if (!_formKey.currentState!.validate()) return;
     if (_selectedCustomerId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please select a customer")),
-      );
+      AppToast.show(context, "Please select a customer",
+          type: ToastType.warning);
       return;
     }
 
@@ -179,8 +184,7 @@ class _CashScreenState extends State<CashScreen> {
           vendorGroupId: _selectedVendorGroupId,
         );
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Cash updated (local)')));
+        AppToast.show(context, 'Cash updated (local)', type: ToastType.success);
         Navigator.pushAndRemoveUntil(
             context,
             MaterialPageRoute(builder: (_) => const HomeScreen()),
@@ -201,8 +205,8 @@ class _CashScreenState extends State<CashScreen> {
             vendorGroupId: _selectedVendorGroupId,
           );
           if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Cash updated (local)')));
+          AppToast.show(context, 'Cash updated (local)',
+              type: ToastType.success);
         } else {
           final txnId = await AppDatabase.createTransactionWithDetails(
             customerId: customerId,
@@ -213,8 +217,8 @@ class _CashScreenState extends State<CashScreen> {
             vendorGroupId: _selectedVendorGroupId,
           );
           if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Cash saved (local) id: $txnId')));
+          AppToast.show(context, 'Cash saved (local) id: $txnId',
+              type: ToastType.success);
         }
       }
 
@@ -226,30 +230,26 @@ class _CashScreenState extends State<CashScreen> {
         _remarksController.clear();
         _selectedVendorGroupId = null;
       });
+      // Ready for the next customer straight away.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _customerFocusNode?.requestFocus();
+      });
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error saving cash: $e')),
-      );
+      AppToast.show(context, 'Error saving cash: $e', type: ToastType.error);
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
   }
 
-  InputDecoration inputDecoration(String label) => InputDecoration(
-        labelText: label,
-        filled: true,
-        fillColor: const Color(0xFFF6F6F6),
-        contentPadding:
-            const EdgeInsets.symmetric(vertical: 16, horizontal: 14),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: Color(0xFFEBEBEB)),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: Color(0xFFEBEBEB)),
-        ),
-      );
+  // Themed field (readable in light and dark), with an icon from the label.
+  InputDecoration inputDecoration(String label) => AppInput.decoration(label);
+
+  @override
+  void dispose() {
+    _amountFocusNode.dispose();
+    _remarksFocusNode.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -258,9 +258,8 @@ class _CashScreenState extends State<CashScreen> {
         appBar: AppBar(
           title:
               Text(widget.transactionId == null ? 'Cash Payment' : 'Edit Cash'),
-          backgroundColor: Colors.black,
         ),
-        body: const Center(child: CircularProgressIndicator()),
+        body: const FormSkeleton(),
       );
     }
 
@@ -269,8 +268,6 @@ class _CashScreenState extends State<CashScreen> {
         title:
             Text(widget.transactionId == null ? 'Cash Payment' : 'Edit Cash'),
         centerTitle: true,
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
       ),
       body: SafeArea(
         child: SingleChildScrollView(
@@ -281,11 +278,17 @@ class _CashScreenState extends State<CashScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const SizedBox(height: 20),
+                PageHero(
+                  icon: Icons.payments_outlined,
+                  title: widget.transactionId == null
+                      ? "Cash payment"
+                      : "Edit cash payment",
+                  subtitle: "Record money received from a customer",
+                ),
                 const Text(
                   "Select Customer",
                   style: TextStyle(
-                    fontWeight: FontWeight.bold,
+                    fontWeight: FontWeight.w600,
                     fontSize: 16,
                   ),
                 ),
@@ -315,7 +318,10 @@ class _CashScreenState extends State<CashScreen> {
                     return Align(
                       alignment: Alignment.topLeft,
                       child: Material(
-                        elevation: 4,
+                        elevation: 6,
+                        color: AppColors.surface,
+                        borderRadius: BorderRadius.circular(AppRadius.md),
+                        clipBehavior: Clip.antiAlias,
                         child: Container(
                           width: MediaQuery.of(context).size.width - 36,
                           constraints: const BoxConstraints(maxHeight: 300),
@@ -335,7 +341,7 @@ class _CashScreenState extends State<CashScreen> {
                                   padding: const EdgeInsets.all(12),
                                   decoration: BoxDecoration(
                                     border: Border.all(
-                                      color: Colors.black12,
+                                      color: AppColors.hairline,
                                     ),
                                     borderRadius: BorderRadius.circular(10),
                                   ),
@@ -351,14 +357,14 @@ class _CashScreenState extends State<CashScreen> {
                                               vertical: 4,
                                             ),
                                             decoration: BoxDecoration(
-                                              color: Colors.grey.shade300,
+                                              color: AppColors.surfaceMuted,
                                               borderRadius:
                                                   BorderRadius.circular(20),
                                             ),
                                             child: Text(
                                               "#${customer['id']}",
                                               style: const TextStyle(
-                                                fontWeight: FontWeight.bold,
+                                                fontWeight: FontWeight.w600,
                                               ),
                                             ),
                                           ),
@@ -367,7 +373,7 @@ class _CashScreenState extends State<CashScreen> {
                                             child: Text(
                                               customer['name'] ?? '',
                                               style: const TextStyle(
-                                                fontWeight: FontWeight.bold,
+                                                fontWeight: FontWeight.w600,
                                                 fontSize: 16,
                                               ),
                                             ),
@@ -378,7 +384,7 @@ class _CashScreenState extends State<CashScreen> {
                                       Text(
                                         customer['address'] ?? '',
                                         style: TextStyle(
-                                          color: Colors.grey.shade700,
+                                          color: AppColors.textSecondary,
                                           fontSize: 13,
                                         ),
                                       ),
@@ -408,11 +414,13 @@ class _CashScreenState extends State<CashScreen> {
                     focusNode,
                     onEditingComplete,
                   ) {
+                    _customerFocusNode = focusNode;
                     controller.text = _selectedCustomer ?? '';
 
                     return TextField(
                       controller: controller,
                       focusNode: focusNode,
+                      textInputAction: TextInputAction.next,
                       onEditingComplete: onEditingComplete,
                       decoration: inputDecoration("Select Customer"),
                     );
@@ -422,7 +430,9 @@ class _CashScreenState extends State<CashScreen> {
                 TextFormField(
                   controller: _amountController,
                   focusNode: _amountFocusNode,
-                  textInputAction: TextInputAction.done,
+                  // Enter moves on to Remarks.
+                  textInputAction: TextInputAction.next,
+                  onFieldSubmitted: (_) => _remarksFocusNode.requestFocus(),
                   keyboardType: TextInputType.number,
                   decoration: inputDecoration("Enter Amount (Rs)"),
                   validator: (v) {
@@ -441,7 +451,7 @@ class _CashScreenState extends State<CashScreen> {
                 ),
                 const SizedBox(height: 10),
                 DropdownButtonFormField<int?>(
-                  value: _vendorGroups.any(
+                  initialValue: _vendorGroups.any(
                           (g) => g['VendorGroupID'] == _selectedVendorGroupId)
                       ? _selectedVendorGroupId
                       : null,
@@ -461,6 +471,7 @@ class _CashScreenState extends State<CashScreen> {
                 const SizedBox(height: 10),
                 TextFormField(
                   controller: _remarksController,
+                  focusNode: _remarksFocusNode,
                   maxLength: 200, // matches the server's Remarks limit
                   maxLines: 2,
                   textInputAction: TextInputAction.done,
@@ -471,18 +482,18 @@ class _CashScreenState extends State<CashScreen> {
                   Align(
                     alignment: Alignment.centerLeft,
                     child: isBalanceLoading
-                        ? const Text(
+                        ? Text(
                             "Loading balance...",
                             style: TextStyle(
-                              color: Colors.grey,
+                              color: AppColors.textSecondary,
                             ),
                           )
                         : Text(
                             "Remaining Balance: Rs.${customerBalance.toStringAsFixed(2)}",
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.red,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.red,
                             ),
                           ),
                   ),
@@ -492,15 +503,12 @@ class _CashScreenState extends State<CashScreen> {
                   child: ElevatedButton(
                     onPressed: _isSaving ? null : _saveCashPayment,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.black,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                        vertical: 14,
-                      ),
-                    ),
+                        padding: const EdgeInsets.symmetric(
+                      vertical: 14,
+                    )).merge(AppButtons.primary),
                     child: _isSaving
-                        ? const CircularProgressIndicator(
-                            color: Colors.white,
+                        ? CircularProgressIndicator(
+                            color: AppColors.onBrand,
                             strokeWidth: 2,
                           )
                         : Text(

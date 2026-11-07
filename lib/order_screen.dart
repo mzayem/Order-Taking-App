@@ -1,5 +1,9 @@
 // lib/screens/order_screen.dart
 import 'package:flutter/material.dart';
+import 'package:dmc/widgets/app_toast.dart';
+import 'package:dmc/theme/app_theme.dart';
+import 'package:dmc/widgets/page_hero.dart';
+import 'package:dmc/widgets/skeleton.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -43,6 +47,7 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
   bool isBalanceLoading = false;
 
   FocusNode? _productFocusNode;
+  FocusNode? _customerFocusNode; // fast entry: back here after each save
 
   @override
   void initState() {
@@ -113,16 +118,14 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
           ),
           title: const Text(
             "Resume Last Order",
-            style: TextStyle(fontWeight: FontWeight.bold),
+            style: TextStyle(fontWeight: FontWeight.w600),
           ),
           content: const Text(
             "You have an unfinished order.\nDo you want to continue?",
           ),
           actions: [
             ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
-              ),
+              style: AppButtons.dangerSoft,
               onPressed: () async {
                 await prefs.remove(_draftKey);
 
@@ -130,13 +133,10 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
               },
               child: const Text(
                 "Start New",
-                style: TextStyle(color: Colors.white),
               ),
             ),
             ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-              ),
+              style: AppButtons.primary,
               onPressed: () {
                 setState(() {
                   selectedCustomer = draft["customer"];
@@ -155,7 +155,6 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
               },
               child: const Text(
                 "Resume",
-                style: TextStyle(color: Colors.white),
               ),
             ),
           ],
@@ -281,8 +280,7 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
 
   Future<void> addProduct() async {
     if (selectedCustomerObj == null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text("Select customer first")));
+      AppToast.show(context, "Select customer first", type: ToastType.warning);
       return;
     }
 
@@ -291,8 +289,8 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
       final available = selectedProduct!['availableQty'] as int? ?? 0;
 
       if (qty <= 0) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Enter valid quantity")));
+        AppToast.show(context, "Enter valid quantity", type: ToastType.warning);
+        _qtyFocusNode.requestFocus(); // cursor goes to what needs fixing
         return;
       }
 
@@ -304,29 +302,19 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(20)),
               title: const Text("Quantity Exceeds",
-                  style: TextStyle(fontWeight: FontWeight.bold)),
+                  style: TextStyle(fontWeight: FontWeight.w600)),
               content: const Text(
                   "The entered quantity exceeds the available stock. Do you want to add it anyway?"),
               actions: [
                 ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.red,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                  ),
+                  style: AppButtons.neutral,
                   onPressed: () => Navigator.pop(context, false),
-                  child:
-                      const Text("No", style: TextStyle(color: Colors.white)),
+                  child: const Text("No"),
                 ),
                 ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                  ),
+                  style: AppButtons.primary,
                   onPressed: () => Navigator.pop(context, true),
-                  child:
-                      const Text("Yes", style: TextStyle(color: Colors.white)),
+                  child: const Text("Yes"),
                 ),
               ],
             );
@@ -343,12 +331,8 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
       if ((selectedProduct!['type']?.toString() ?? '') == "Narcotics" &&
           (selectedCustomerObj!['isNarcoticsAllowed'] as bool? ?? true) ==
               false) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("⚠ Narcotics not allowed to this customer"),
-            backgroundColor: Colors.orange,
-          ),
-        );
+        AppToast.show(context, "Narcotics not allowed to this customer",
+            type: ToastType.warning);
       }
 
       final price = (selectedProduct!['price'] as num? ?? 0).toDouble();
@@ -434,24 +418,21 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
 
   void _saveOrderAs(String type) async {
     if (selectedCustomer == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please select a customer")),
-      );
+      AppToast.show(context, "Please select a customer",
+          type: ToastType.warning);
       return;
     }
 
     if (selectedProducts.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Add at least one product")),
-      );
+      AppToast.show(context, "Add at least one product",
+          type: ToastType.warning);
       return;
     }
 
     final custId = selectedCustomerObj?['id'] as int?;
     if (custId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Select the customer from the list")),
-      );
+      AppToast.show(context, "Select the customer from the list",
+          type: ToastType.warning);
       return;
     }
 
@@ -488,9 +469,7 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
 
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("$type updated (local)")),
-      );
+      AppToast.show(context, "$type updated (local)", type: ToastType.success);
 
       Navigator.pushAndRemoveUntil(
         context,
@@ -519,9 +498,7 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
 
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("$type updated (local)")),
-      );
+      AppToast.show(context, "$type updated (local)", type: ToastType.success);
     } else {
       final txnId = await AppDatabase.createTransactionWithDetails(
         customerId: custId,
@@ -531,9 +508,8 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
 
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("$type saved (local) id: $txnId")),
-      );
+      AppToast.show(context, "$type saved (local) id: $txnId",
+          type: ToastType.success);
     }
 
     /// CLEAR DRAFT AFTER SUCCESS
@@ -548,6 +524,10 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
         selectedProducts = [];
         qtyController.clear();
       });
+      // Ready for the next customer straight away.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _customerFocusNode?.requestFocus();
+      });
     }
   }
 
@@ -561,32 +541,21 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
           ),
           title: const Text(
             "Cancel Order",
-            style: TextStyle(fontWeight: FontWeight.bold),
+            style: TextStyle(fontWeight: FontWeight.w600),
           ),
           content: const Text(
             "Are you sure you want to cancel this order?",
           ),
           actions: [
             ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
+              style: AppButtons.neutral,
               onPressed: () => Navigator.pop(context),
               child: const Text(
                 "No",
-                style: TextStyle(color: Colors.white),
               ),
             ),
             ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
+              style: AppButtons.danger,
               onPressed: () {
                 Navigator.pop(context);
 
@@ -613,7 +582,6 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
               },
               child: const Text(
                 "Yes",
-                style: TextStyle(color: Colors.white),
               ),
             ),
           ],
@@ -630,19 +598,15 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
       return Scaffold(
         appBar: AppBar(
           title: Text(widget.transactionId == null ? "Order" : "Edit Order"),
-          backgroundColor: Colors.black,
         ),
-        body: const Center(child: CircularProgressIndicator()),
+        body: const FormSkeleton(),
       );
     }
 
     return Scaffold(
-      backgroundColor: Colors.white,
       appBar: AppBar(
         centerTitle: true,
         title: Text(widget.transactionId == null ? "Order" : "Edit Order"),
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
       ),
 
       /// YOUR UI BELOW IS EXACTLY SAME
@@ -653,8 +617,13 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            PageHero(
+              icon: Icons.shopping_cart_outlined,
+              title: widget.transactionId == null ? "New order" : "Edit order",
+              subtitle: "Pick a customer, add products, then save",
+            ),
             const Text("Select Customer",
-                style: TextStyle(fontWeight: FontWeight.bold)),
+                style: TextStyle(fontWeight: FontWeight.w600)),
             const SizedBox(height: 6),
             Autocomplete<Map<String, dynamic>>(
               initialValue: selectedCustomer != null
@@ -677,7 +646,10 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
                 return Align(
                   alignment: Alignment.topLeft,
                   child: Material(
-                    elevation: 4,
+                    elevation: 6,
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(AppRadius.md),
+                    clipBehavior: Clip.antiAlias,
                     child: Container(
                       width: MediaQuery.of(context).size.width - 32,
                       constraints: const BoxConstraints(maxHeight: 300),
@@ -697,7 +669,7 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
                               ),
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
-                                border: Border.all(color: Colors.black),
+                                border: Border.all(color: AppColors.hairline),
                                 borderRadius: BorderRadius.circular(10),
                               ),
                               child: Column(
@@ -711,14 +683,14 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
                                           vertical: 4,
                                         ),
                                         decoration: BoxDecoration(
-                                          color: Colors.grey.shade300,
+                                          color: AppColors.surfaceMuted,
                                           borderRadius:
                                               BorderRadius.circular(20),
                                         ),
                                         child: Text(
                                           "#${customer['id']}",
                                           style: const TextStyle(
-                                            fontWeight: FontWeight.bold,
+                                            fontWeight: FontWeight.w600,
                                           ),
                                         ),
                                       ),
@@ -728,7 +700,7 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
                                           customer['name'] ?? '',
                                           style: const TextStyle(
                                             fontSize: 20,
-                                            fontWeight: FontWeight.bold,
+                                            fontWeight: FontWeight.w600,
                                           ),
                                         ),
                                       ),
@@ -738,7 +710,7 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
                                   Text(
                                     customer['address'] ?? '',
                                     style: TextStyle(
-                                      color: Colors.grey.shade700,
+                                      color: AppColors.textSecondary,
                                       fontSize: 14,
                                     ),
                                   ),
@@ -774,12 +746,8 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
                 if (existingId != null) {
                   await _loadExistingTransaction(existingId);
 
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text("Previous order loaded"),
-                      backgroundColor: Colors.blue,
-                    ),
-                  );
+                  AppToast.show(context, "Previous order loaded",
+                      type: ToastType.info);
                 } else {
                   setState(() {
                     selectedProducts.clear();
@@ -790,21 +758,23 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
               },
               fieldViewBuilder:
                   (context, controller, focusNode, onFieldSubmitted) {
+                _customerFocusNode = focusNode;
                 controller.text = selectedCustomer ?? '';
 
                 return TextField(
                   controller: controller,
                   focusNode: focusNode,
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                    hintText: "Search Customer...",
-                  ),
+                  // Enter picks the top match (then the cursor jumps to Product).
+                  textInputAction: TextInputAction.next,
+                  onSubmitted: (_) => onFieldSubmitted(),
+                  decoration: AppInput.decoration("Customer",
+                      hint: "Search customer..."),
                 );
               },
             ),
             const SizedBox(height: 20),
             const Text("Select Product",
-                style: TextStyle(fontWeight: FontWeight.bold)),
+                style: TextStyle(fontWeight: FontWeight.w600)),
             const SizedBox(height: 6),
             Autocomplete<Map<String, dynamic>>(
               displayStringForOption: (option) => "${option['name']}  ",
@@ -849,10 +819,11 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
                 return TextField(
                   controller: controller,
                   focusNode: focusNode,
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                    hintText: "Search Product...",
-                  ),
+                  // Enter picks the top match (then the cursor jumps to QTY).
+                  textInputAction: TextInputAction.next,
+                  onSubmitted: (_) => onFieldSubmitted(),
+                  decoration:
+                      AppInput.decoration("Product", hint: "Search product..."),
                 );
               },
             ),
@@ -863,23 +834,22 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
                   child: TextField(
                     controller: qtyController,
                     focusNode: _qtyFocusNode,
-                    decoration: const InputDecoration(
-                      labelText: "QTY",
-                      border: OutlineInputBorder(),
-                    ),
+                    decoration: AppInput.decoration("QTY"),
                     keyboardType: TextInputType.number,
+                    // Enter adds the product; the cursor goes back to Product.
+                    textInputAction: TextInputAction.done,
+                    onSubmitted: (_) => addProduct(),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: TextField(
                     readOnly: true,
-                    decoration: InputDecoration(
-                      border: const OutlineInputBorder(),
-                      hintText: selectedProduct != null
-                          ? selectedProduct!['availableQty'].toString()
-                          : "Available QTY",
-                    ),
+                    decoration: AppInput.decoration("Available",
+                        icon: Icons.inventory_2_outlined,
+                        hint: selectedProduct != null
+                            ? selectedProduct!['availableQty'].toString()
+                            : "Available QTY"),
                   ),
                 ),
               ],
@@ -889,15 +859,14 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
               width: double.infinity,
               child: ElevatedButton(
                 onPressed: addProduct,
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.black),
-                child: const Text("Add Product",
-                    style: TextStyle(color: Colors.white)),
+                style: AppButtons.primarySoft,
+                child: const Text("Add Product"),
               ),
             ),
             const SizedBox(height: 20),
             if (selectedProducts.isNotEmpty) ...[
               const Text("Selected Products",
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
               const SizedBox(height: 12),
               SizedBox(
                 height: 240,
@@ -914,11 +883,11 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
                       child: ListTile(
                         title: Text(p['name'],
                             style:
-                                const TextStyle(fontWeight: FontWeight.bold)),
+                                const TextStyle(fontWeight: FontWeight.w600)),
                         subtitle:
                             Text("Qty: ${p['qty']}   Price: Rs.${p['price']}"),
                         trailing: IconButton(
-                          icon: const Icon(Icons.delete, color: Colors.red),
+                          icon: Icon(Icons.delete, color: AppColors.red),
                           onPressed: () async {
                             setState(() => selectedProducts.removeAt(i));
 
@@ -938,17 +907,17 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
                 Text(
                   "Total Amount: Rs.${totalAmount.toStringAsFixed(2)}",
                   style: const TextStyle(
-                      fontSize: 18, fontWeight: FontWeight.bold),
+                      fontSize: 18, fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 8),
                 isBalanceLoading
                     ? const Text("Loading balance...")
                     : Text(
                         "Remaining Balance: Rs.${customerBalance.toStringAsFixed(2)}",
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.red,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.red,
                         ),
                       ),
               ],
@@ -961,10 +930,8 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
                   child: ElevatedButton(
                     onPressed: _cancelOrder,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red[400],
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
+                            padding: const EdgeInsets.symmetric(vertical: 14))
+                        .merge(AppButtons.neutral),
                     child: const Text("Cancel"),
                   ),
                 ),
@@ -973,16 +940,14 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
                   child: ElevatedButton(
                     onPressed: () => _saveOrderAs("Order"),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
+                            padding: const EdgeInsets.symmetric(vertical: 14))
+                        .merge(AppButtons.primary),
                     child: _isSaving
-                        ? const SizedBox(
+                        ? SizedBox(
                             height: 20,
                             width: 20,
                             child: CircularProgressIndicator(
-                                color: Colors.white, strokeWidth: 2),
+                                color: AppColors.onBrand, strokeWidth: 2),
                           )
                         : const Text("Save"),
                   ),
