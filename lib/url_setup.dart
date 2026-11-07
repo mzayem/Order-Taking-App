@@ -21,12 +21,23 @@ class UrlSetupScreen extends StatefulWidget {
 class _UrlSetupScreenState extends State<UrlSetupScreen> {
   final TextEditingController urlController = TextEditingController();
   bool isLoading = false;
+  bool _useIp = false; // tab: false = web address, true = IP address
+
+  // 192.168.1.2, 192.168.1.2:2000, optionally followed by a path.
+  static final _ipLike = RegExp(r'^\d{1,3}(\.\d{1,3}){3}(:\d+)?(/.*)?$');
 
   @override
   void initState() {
     super.initState();
     SharedPreferences.getInstance().then((prefs) {
-      urlController.text = prefs.getString('baseUrl') ?? '';
+      final saved = prefs.getString('baseUrl') ?? '';
+      final bare = saved.replaceFirst(RegExp(r'^https?://'), '');
+      if (!mounted) return;
+      setState(() {
+        _useIp = _ipLike.hasMatch(bare);
+        // The IP tab shows just ip:port; the URL tab shows the full address.
+        urlController.text = _useIp ? bare : saved;
+      });
     });
     if (widget.message != null) {
       WidgetsBinding.instance
@@ -46,8 +57,16 @@ class _UrlSetupScreenState extends State<UrlSetupScreen> {
     /// 🔹 ADD http automatically if user didn't type it
     // A bare address is tried over secure https first; plain http is only the
     // fallback for servers that do not have a certificate yet.
-    final typedScheme = url.startsWith("http://") || url.startsWith("https://");
-    if (!typedScheme) url = "https://$url";
+    var typedScheme = url.startsWith("http://") || url.startsWith("https://");
+    // A bare IP (192.168.1.2:2000) has no certificate, so it is plain http
+    // straight away, whichever tab it was typed in.
+    final bare = url.replaceFirst(RegExp(r'^https?://'), '');
+    if (_useIp || _ipLike.hasMatch(bare)) {
+      url = "http://$bare";
+      typedScheme = true; // no https attempt
+    } else if (!typedScheme) {
+      url = "https://$url";
+    }
 
     // Tolerate a trailing slash (or several) and a pasted "/api" suffix.
     var cleanUrl = url
@@ -178,12 +197,24 @@ class _UrlSetupScreenState extends State<UrlSetupScreen> {
             const SizedBox(height: 20),
             const Text("Setup App", style: TextStyle(fontSize: 28)),
             const SizedBox(height: 30),
+            _ModeTabs(
+              useIp: _useIp,
+              onChanged: (ip) => setState(() {
+                _useIp = ip;
+                urlController.clear();
+              }),
+            ),
+            const SizedBox(height: 20),
             TextField(
               controller: urlController,
-              decoration: const InputDecoration(
-                labelText: "Enter API URL",
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.link),
+              keyboardType: _useIp
+                  ? const TextInputType.numberWithOptions(decimal: true)
+                  : TextInputType.url,
+              decoration: InputDecoration(
+                labelText: _useIp ? "IP address and port" : "Enter API URL",
+                hintText: _useIp ? "192.168.1.2:2000" : "api.mycompany.com",
+                border: const OutlineInputBorder(),
+                prefixIcon: Icon(_useIp ? Icons.lan_outlined : Icons.link),
               ),
             ),
             const SizedBox(height: 20),
@@ -199,6 +230,59 @@ class _UrlSetupScreenState extends State<UrlSetupScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// "Web address | IP address" switch.
+class _ModeTabs extends StatelessWidget {
+  final bool useIp;
+  final ValueChanged<bool> onChanged;
+  const _ModeTabs({required this.useIp, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    Widget tab(String label, IconData icon, bool selected, bool ip) {
+      return Expanded(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => onChanged(ip),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            padding: const EdgeInsets.symmetric(vertical: 11),
+            decoration: BoxDecoration(
+              color: selected ? AppColors.brand : Colors.transparent,
+              borderRadius: BorderRadius.circular(24),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon,
+                    size: 18,
+                    color: selected ? AppColors.onBrand : AppColors.brand),
+                const SizedBox(width: 6),
+                Text(label,
+                    style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color:
+                            selected ? AppColors.onBrand : AppColors.brand)),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: AppColors.brand.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(28),
+      ),
+      child: Row(children: [
+        tab('URL', Icons.link, !useIp, false),
+        tab('IP address', Icons.lan_outlined, useIp, true),
+      ]),
     );
   }
 }

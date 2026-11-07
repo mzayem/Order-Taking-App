@@ -122,9 +122,9 @@ class _AboutScreenState extends State<AboutScreen> {
                         ],
                         if (CompanyInfo.productOf.isNotEmpty) ...[
                           const SizedBox(height: 10),
-                          Text(CompanyInfo.productOf,
-                              style: const TextStyle(
-                                  fontSize: 14, color: Colors.white)),
+                          const Text(CompanyInfo.productOf,
+                              style:
+                                  TextStyle(fontSize: 14, color: Colors.white)),
                         ],
                         const SizedBox(height: 12),
                         if (_version == null)

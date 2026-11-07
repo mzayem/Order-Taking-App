@@ -5,7 +5,6 @@ import 'package:dmc/theme/app_theme.dart';
 import 'package:dmc/widgets/page_hero.dart';
 import 'package:dmc/widgets/skeleton.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../db/database.dart';
 import 'services/api_service.dart';

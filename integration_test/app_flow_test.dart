@@ -14,7 +14,6 @@ import 'package:dmc/services/app_log.dart';
 import 'package:dmc/services/transaction_export.dart';
 import 'package:dmc/theme/app_theme.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -125,13 +124,16 @@ void main() {
       final db = await seed();
       final now = DateTime.now();
       final id = await insertTx(db, customerId: 1, type: 'Order', date: now);
-      expect(await AppDatabase.findTransactionForCustomerOnDate(1, 'Order', now),
+      expect(
+          await AppDatabase.findTransactionForCustomerOnDate(1, 'Order', now),
           id);
-      expect(await AppDatabase.findTransactionForCustomerOnDate(2, 'Order', now),
+      expect(
+          await AppDatabase.findTransactionForCustomerOnDate(2, 'Order', now),
           isNull);
       // A synced order is closed: a new one must be created instead.
       await AppDatabase.markTransactionSynced(id);
-      expect(await AppDatabase.findTransactionForCustomerOnDate(1, 'Order', now),
+      expect(
+          await AppDatabase.findTransactionForCustomerOnDate(1, 'Order', now),
           isNull);
     });
 
@@ -169,14 +171,14 @@ void main() {
         }
       }
 
-      final a = await timed('fetchNotifications', ApiService.fetchNotifications);
+      final a =
+          await timed('fetchNotifications', ApiService.fetchNotifications);
       final b = await timed('fetchVendorGroups', ApiService.fetchVendorGroups);
       // ignore: avoid_print
       print('NET>>> $a | $b');
     });
 
-    testWidgets('CSV: columns, quoting, multi-line items, status',
-        (t) async {
+    testWidgets('CSV: columns, quoting, multi-line items, status', (t) async {
       final db = await seed();
       final now = DateTime.now();
       final a = await insertTx(db,
@@ -225,10 +227,8 @@ void main() {
     testWidgets('activity log: paging 50, filters, clear', (t) async {
       await seed();
       for (var i = 0; i < 120; i++) {
-        await AppLog.add(
-            i % 4 == 0 ? LogLevel.error : LogLevel.info,
-            i.isEven ? LogCategory.sync : LogCategory.api,
-            'entry $i');
+        await AppLog.add(i % 4 == 0 ? LogLevel.error : LogLevel.info,
+            i.isEven ? LogCategory.sync : LogCategory.api, 'entry $i');
       }
       expect(await AppLog.count(), 120);
       expect((await AppLog.page(page: 0)).length, 50);
@@ -237,8 +237,7 @@ void main() {
       expect(await AppLog.count(level: LogLevel.error), 30);
       expect(await AppLog.count(category: LogCategory.api), 60);
       expect(
-          await AppLog.count(
-              level: LogLevel.error, category: LogCategory.api),
+          await AppLog.count(level: LogLevel.error, category: LogCategory.api),
           0,
           reason: 'errors are on even entries = sync only');
       final newest = (await AppLog.page(page: 0)).first;
@@ -291,7 +290,8 @@ void main() {
 
       await t.ensureVisible(find.widgetWithText(ElevatedButton, 'Save'));
       await t.tap(find.widgetWithText(ElevatedButton, 'Save'));
-      await eventually(t, () async => (await db.query('"Transaction"')).isNotEmpty,
+      await eventually(
+          t, () async => (await db.query('"Transaction"')).isNotEmpty,
           reason: 'order saved');
       await settle(t);
 
@@ -303,7 +303,8 @@ void main() {
       expect(rows.single['UserID'], kMe);
       expect(await db.query('TransactionDetail'), hasLength(2));
 
-      expect(find.text('Selected Products'), findsNothing, reason: 'form cleared');
+      expect(find.text('Selected Products'), findsNothing,
+          reason: 'form cleared');
       expect(focusedLabel(), 'Customer', reason: 'ready for the next customer');
     });
 
@@ -342,7 +343,8 @@ void main() {
 
       await t.ensureVisible(find.text('Save Cash Payment'));
       await t.tap(find.text('Save Cash Payment'));
-      await eventually(t, () async => (await db.query('"Transaction"')).isNotEmpty,
+      await eventually(
+          t, () async => (await db.query('"Transaction"')).isNotEmpty,
           reason: 'cash saved');
       await settle(t);
 
@@ -415,15 +417,19 @@ void main() {
           date: now,
           total: 300,
           details: [(productId: 10, qty: 15, price: 20.0, batch: '')]);
+      await insertTx(db, customerId: 1, type: 'Cash', date: now, total: 500);
       await insertTx(db,
-          customerId: 1, type: 'Cash', date: now, total: 500);
-      await insertTx(db,
-          customerId: 2, type: 'Return', date: now, total: 200, status: 'Failed');
+          customerId: 2,
+          type: 'Return',
+          date: now,
+          total: 200,
+          status: 'Failed');
 
       await launch(t);
       await waitFor(t, find.text('ALI MEDICAL STORE'), reason: 'list loaded');
       await settle(t, 1200); // totals count up
-      expect(find.text('Rs 1,300'), findsOneWidget, reason: 'orders = 1000+300');
+      expect(find.text('Rs 1,300'), findsOneWidget,
+          reason: 'orders = 1000+300');
       expect(find.text('Rs 500'), findsOneWidget, reason: 'cash');
       expect(find.text('3 not synced'), findsOneWidget,
           reason: 'pending order + pending cash + failed return');
@@ -458,8 +464,7 @@ void main() {
       expect(t.takeException(), isNull);
     });
 
-    testWidgets('Notification bell: offline panel opens and closes',
-        (t) async {
+    testWidgets('Notification bell: offline panel opens and closes', (t) async {
       await seed();
       await launch(t);
       await t.tap(find.byTooltip('Notifications'));
@@ -517,11 +522,13 @@ void main() {
       expect(stat('Not synced', '1'), findsOneWidget);
       expect(find.text('Not synced'), findsOneWidget);
       expect(find.widgetWithText(ElevatedButton, 'Export'), findsOneWidget);
-      expect(find.widgetWithText(ElevatedButton, 'Export & clear'), findsOneWidget);
+      expect(find.widgetWithText(ElevatedButton, 'Export & clear'),
+          findsOneWidget);
       expect(t.takeException(), isNull);
     });
 
-    testWidgets('Insights: compares with yesterday and shows 7 days', (t) async {
+    testWidgets('Insights: compares with yesterday and shows 7 days',
+        (t) async {
       final db = await seed();
       final now = DateTime.now();
       await insertTx(db, customerId: 1, type: 'Order', date: now, total: 500);
@@ -577,7 +584,8 @@ void main() {
       await tapNav(t, 'Profile');
       final lightGlass = AppColors.glassFill;
 
-      await tapScrolling(t, find.widgetWithText(SwitchListTile, 'Match system'));
+      await tapScrolling(
+          t, find.widgetWithText(SwitchListTile, 'Match system'));
       await settle(t);
       await tapScrolling(t, find.widgetWithText(SwitchListTile, 'Dark mode'));
       await settle(t);
@@ -593,8 +601,7 @@ void main() {
       expect(paint, isNot(lightGlass),
           reason: 'cards on THIS page must not keep the light colour');
       expect(paint, AppColors.glassFill);
-      expect(
-          (await SharedPreferences.getInstance()).getString('themeMode'),
+      expect((await SharedPreferences.getInstance()).getString('themeMode'),
           'dark');
 
       // "restart": rebuild the app from saved settings
@@ -618,7 +625,8 @@ void main() {
       await typeIn(t, 'Batch No', batch);
     }
 
-    testWidgets('Return: a batch the customer really bought is accepted + saved',
+    testWidgets(
+        'Return: a batch the customer really bought is accepted + saved',
         (t) async {
       final db = await seed(baseUrl: api.baseUrl);
       api.sold(1, 10, 'B-100'); // Ali bought Panadol batch B-100
@@ -643,7 +651,8 @@ void main() {
 
       await t.ensureVisible(find.widgetWithText(ElevatedButton, 'Save'));
       await t.tap(find.widgetWithText(ElevatedButton, 'Save'));
-      await eventually(t, () async => (await db.query('"Transaction"')).isNotEmpty,
+      await eventually(
+          t, () async => (await db.query('"Transaction"')).isNotEmpty,
           reason: 'return saved');
       await settle(t);
 
@@ -658,7 +667,8 @@ void main() {
       expect(focusedLabel(), 'Select Customer...', reason: 'ready for next');
     });
 
-    testWidgets('Return: a batch that was never sold is refused with the reason',
+    testWidgets(
+        'Return: a batch that was never sold is refused with the reason',
         (t) async {
       final db = await seed(baseUrl: api.baseUrl);
       api.sold(1, 10, 'B-100');
@@ -700,7 +710,8 @@ void main() {
           date: now,
           total: 100,
           details: [(productId: 10, qty: 5, price: 20.0, batch: '')]);
-      final b = await insertTx(db, customerId: 2, type: 'Cash', date: now, total: 500);
+      final b = await insertTx(db,
+          customerId: 2, type: 'Cash', date: now, total: 500);
 
       final res = await ApiService.syncAllTransactions();
       expect(res['ok'], isTrue);
@@ -719,8 +730,10 @@ void main() {
       expect(up.body['userId'], kMe);
       final sent = (up.body['data'] as List).cast<Map<String, dynamic>>();
       expect(sent.map((e) => e['clientId']).toSet(), {a, b});
-      expect(sent.firstWhere((e) => e['clientId'] == a)['type'], 0, reason: 'Order');
-      expect(sent.firstWhere((e) => e['clientId'] == b)['type'], 1, reason: 'Cash');
+      expect(sent.firstWhere((e) => e['clientId'] == a)['type'], 0,
+          reason: 'Order');
+      expect(sent.firstWhere((e) => e['clientId'] == b)['type'], 1,
+          reason: 'Cash');
       expect(sent.first['date'].toString().endsWith('Z'), isTrue,
           reason: 'sent as UTC');
 
@@ -734,8 +747,10 @@ void main() {
         (t) async {
       final db = await seed(baseUrl: api.baseUrl);
       final now = DateTime.now();
-      final ok = await insertTx(db, customerId: 1, type: 'Cash', date: now, total: 100);
-      final bad = await insertTx(db, customerId: 2, type: 'Cash', date: now, total: 200);
+      final ok = await insertTx(db,
+          customerId: 1, type: 'Cash', date: now, total: 100);
+      final bad = await insertTx(db,
+          customerId: 2, type: 'Cash', date: now, total: 200);
       api.rejectClientIds = {bad};
 
       final res = await ApiService.syncAllTransactions();
@@ -759,7 +774,8 @@ void main() {
     testWidgets('sync: expired session (401) keeps the data, drops the token',
         (t) async {
       final db = await seed(baseUrl: api.baseUrl);
-      final id = await insertTx(db, customerId: 1, type: 'Cash', date: DateTime.now(), total: 10);
+      final id = await insertTx(db,
+          customerId: 1, type: 'Cash', date: DateTime.now(), total: 10);
       api.unauthorized = true;
 
       final res = await ApiService.syncAllTransactions();
@@ -808,7 +824,8 @@ void main() {
           reason: 'full screen shows the read state');
       expect(t.takeException(), isNull);
     });
-    testWidgets('Notification bell: latest 5 even if the server sends oldest first',
+    testWidgets(
+        'Notification bell: latest 5 even if the server sends oldest first',
         (t) async {
       await seed(baseUrl: api.baseUrl);
       api.notifications = [
@@ -841,7 +858,8 @@ void main() {
   // ---------------------------------------------------------------------
   group('small phone / large text', () {
     for (final dark in [false, true]) {
-      testWidgets('no overflow on 320x568 at 1.5x text | ${dark ? 'dark' : 'light'}',
+      testWidgets(
+          'no overflow on 320x568 at 1.5x text | ${dark ? 'dark' : 'light'}',
           (t) async {
         final db = await seed();
         await (await SharedPreferences.getInstance())
@@ -903,5 +921,4 @@ void main() {
       });
     }
   });
-
 }

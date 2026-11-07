@@ -6,7 +6,6 @@ import 'package:dmc/main.dart';
 import 'package:dmc/theme/theme_controller.dart';
 import 'package:dmc/widgets/floating_nav_bar.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
@@ -184,7 +183,8 @@ Future<void> waitFor(WidgetTester t, Finder f,
     await t.pump(const Duration(milliseconds: 100));
     if (f.evaluate().isNotEmpty) return;
   }
-  fail('Timed out after ${seconds}s waiting for ${f.describeMatch(Plurality.one)}'
+  fail(
+      'Timed out after ${seconds}s waiting for ${f.describeMatch(Plurality.one)}'
       '${reason == null ? '' : ' ($reason)'}');
 }
 
@@ -196,7 +196,8 @@ Future<void> eventually(WidgetTester t, Future<bool> Function() cond,
     await t.pump(const Duration(milliseconds: 100));
     if (await cond()) return;
   }
-  fail('Condition not met within ${seconds}s${reason == null ? '' : ' ($reason)'}');
+  fail(
+      'Condition not met within ${seconds}s${reason == null ? '' : ' ($reason)'}');
 }
 
 Future<void> tapNav(WidgetTester t, String label) async {
@@ -236,4 +237,3 @@ Future<void> pressEnter(WidgetTester t, TextInputAction a) async {
   await t.pump(const Duration(milliseconds: 300));
   await settle(t);
 }
-

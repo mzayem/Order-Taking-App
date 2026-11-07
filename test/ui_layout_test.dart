@@ -170,14 +170,14 @@ void main() {
 
     layoutMatrix(
       'PageHero (long text + trailing)',
-      () => Padding(
-        padding: const EdgeInsets.all(16),
+      () => const Padding(
+        padding: EdgeInsets.all(16),
         child: PageHero(
           icon: Icons.tune_rounded,
           title: 'A really long page title that must not overflow the card',
           subtitle:
               'And a long help line that explains what this page is for in detail',
-          trailing: const Icon(Icons.chevron_right, color: Colors.white),
+          trailing: Icon(Icons.chevron_right, color: Colors.white),
         ),
       ),
     );
@@ -199,7 +199,8 @@ void main() {
               TextField(decoration: AppInput.decoration('Enter Amount (Rs)')),
               const SizedBox(height: 12),
               Row(children: [
-                Expanded(child: TextField(decoration: AppInput.decoration('QTY'))),
+                Expanded(
+                    child: TextField(decoration: AppInput.decoration('QTY'))),
                 const SizedBox(width: 12),
                 Expanded(
                     child: TextField(
@@ -217,7 +218,8 @@ void main() {
       () => const AboutScreen(),
       after: (t) async {
         // Developer details you provided must be on screen.
-        expect(find.text('Muhammad Zayem', skipOffstage: false), findsOneWidget);
+        expect(
+            find.text('Muhammad Zayem', skipOffstage: false), findsOneWidget);
       },
     );
   });
@@ -225,7 +227,8 @@ void main() {
   group('overlays', () {
     for (final s in sizes.entries) {
       for (final dark in [false, true]) {
-        testWidgets('notification dropdown | ${s.key} | ${dark ? 'dark' : 'light'}',
+        testWidgets(
+            'notification dropdown | ${s.key} | ${dark ? 'dark' : 'light'}',
             (t) async {
           SharedPreferences.setMockInitialValues({});
           late BuildContext ctx;
@@ -350,8 +353,11 @@ void main() {
             dark: dark);
         final img = t.widget<Image>(find.byType(Image));
         final provider = (img.image as ResizeImage).imageProvider as AssetImage;
-        expect(provider.assetName,
-            dark ? 'assets/images/logo_dark.png' : 'assets/images/logo_light.png');
+        expect(
+            provider.assetName,
+            dark
+                ? 'assets/images/logo_dark.png'
+                : 'assets/images/logo_light.png');
       });
     }
 
