@@ -2,7 +2,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
-import 'package:sqflite/sqflite.dart';
 import 'dart:convert';
 import '../db/database.dart';
 import 'services/api_service.dart';
@@ -217,9 +216,9 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
           uniqueProd[name] = {
             'id': id,
             'name': name,
-            'price': (r['UnitPrice'] as num).toInt(),
+            'price': (r['UnitPrice'] as num).toDouble(),
             'availableQty': r['AvailableQty'] as int,
-            'type': r['Type'],
+            'type': r['ProductType'],
           };
         }
       }
@@ -352,7 +351,7 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
         );
       }
 
-      final price = selectedProduct!['price'] as int? ?? 0;
+      final price = (selectedProduct!['price'] as num? ?? 0).toDouble();
 
       final productName = selectedProduct!['name'];
 
@@ -368,6 +367,7 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
         } else {
           /// ADD NEW PRODUCT
           selectedProducts.add({
+            "id": selectedProduct!['id'],
             "name": productName,
             "qty": qty,
             "price": price,
@@ -386,8 +386,8 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
     }
   }
 
-  int get totalAmount =>
-      selectedProducts.fold(0, (sum, item) => sum + (item['total'] as int));
+  double get totalAmount => selectedProducts.fold(
+      0.0, (sum, item) => sum + (item['total'] as num).toDouble());
 
   /// LOAD EXISTING ORDER
 
@@ -406,19 +406,25 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
             where: 'CustomerID = ?', whereArgs: [custId], limit: 1);
         if (custRows.isNotEmpty) {
           selectedCustomer = custRows.first['Name'] as String?;
-          selectedCustomerObj = {"id": custId, "name": selectedCustomer};
+          selectedCustomerObj = {
+            "id": custId,
+            "name": selectedCustomer,
+            "isNarcoticsAllowed": custRows.first['IsNarcotics'] == 1,
+          };
           _fetchCustomerBalance(custId);
         }
       }
 
-      selectedProducts = rows.map((r) {
-        return {
-          "name": r['ProductName'],
-          "qty": (r['Qty'] as num).toInt(),
-          "price": (r['UnitPrice'] as num).toInt(),
-          "total": (r['TotalPrice'] as num).toInt(),
-        };
-      }).toList();
+      selectedProducts = rows
+          .where((r) => r['TransactionDetailID'] != null)
+          .map((r) => <String, dynamic>{
+                "id": r['ProductID'],
+                "name": r['ProductName'],
+                "qty": (r['Qty'] as num).toInt(),
+                "price": (r['UnitPrice'] as num).toDouble(),
+                "total": (r['TotalPrice'] as num).toDouble(),
+              })
+          .toList();
     }
 
     if (mounted) setState(() => _isLoading = false);
@@ -441,18 +447,23 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
       return;
     }
 
-    // Ensure customer exists
-    final custId =
-        await AppDatabase.insertCustomerIfNotExists(selectedCustomer!);
+    final custId = selectedCustomerObj?['id'] as int?;
+    if (custId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Select the customer from the list")),
+      );
+      return;
+    }
 
     final details = <Map<String, dynamic>>[];
 
     for (final p in selectedProducts) {
-      final prodId = await AppDatabase.insertProductIfNotExists(
-        p['name'],
-        unitPrice: (p['price'] as num).toDouble(),
-        availableQty: 0,
-      );
+      final prodId = p['id'] as int? ??
+          await AppDatabase.insertProductIfNotExists(
+            p['name'],
+            unitPrice: (p['price'] as num).toDouble(),
+            availableQty: 0,
+          );
 
       details.add({
         'productId': prodId,
@@ -532,6 +543,7 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
     if (mounted) {
       setState(() {
         selectedCustomer = null;
+        selectedCustomerObj = null;
         selectedProduct = null;
         selectedProducts = [];
         qtyController.clear();
@@ -924,7 +936,7 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  "Total Amount: Rs.$totalAmount",
+                  "Total Amount: Rs.${totalAmount.toStringAsFixed(2)}",
                   style: const TextStyle(
                       fontSize: 18, fontWeight: FontWeight.bold),
                 ),

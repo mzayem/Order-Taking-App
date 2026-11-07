@@ -1,4 +1,5 @@
 import 'package:dmc/db/database.dart';
+import 'package:dmc/services/local_notifier.dart';
 import 'package:dmc/splash_screen.dart';
 import 'package:flutter/material.dart';
 
@@ -10,6 +11,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // await AppDatabase.deleteDatabaseFile();
   await AppDatabase.init(); // initialize DB
+  await LocalNotifier.init(); // phone notifications (asks permission once)
   runApp(const MyApp());
 }
 

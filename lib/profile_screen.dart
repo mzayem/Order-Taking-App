@@ -34,15 +34,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _logout(BuildContext context) async {
     final prefs = await SharedPreferences.getInstance();
 
-    final baseUrl = prefs.getString('baseUrl');
+    // Session only: server setup (baseUrl, isUrlSaved, headerRef) stays.
+    // Drafts go too, so the next user doesn't see this user's unfinished work.
+    for (final key in [
+      'token',
+      'userId',
+      'username',
+      'townIds',
+      'townNames',
+      'order_draft',
+      'return_draft',
+      'lastAlertedNotificationId',
+      'lastDataRefresh', // next user loads their own towns' customers
 
-    // 🔥 Clear all session data
-    await prefs.clear();
-
-    if (baseUrl != null) {
-      await prefs.setString('baseUrl', baseUrl);
+    ]) {
+      await prefs.remove(key);
     }
 
+    if (!context.mounted) return;
     Navigator.pushAndRemoveUntil(
       context,
       MaterialPageRoute(builder: (context) => const LoginScreen()),

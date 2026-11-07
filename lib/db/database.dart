@@ -1,5 +1,6 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class AppDatabase {
   static Database? _db;
@@ -12,7 +13,7 @@ class AppDatabase {
 
     _db = await openDatabase(
       path,
-      version: 4,
+      version: 6,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON;');
       },
@@ -83,6 +84,9 @@ class AppDatabase {
           TotalAmount REAL,
           CashAmount REAL,
           Remarks TEXT,
+          VendorGroupID INTEGER,
+          UserID TEXT,
+          UserName TEXT,
           SyncStatus TEXT,
           RemoteTransactionID INTEGER,
           CreatedAt TEXT,
@@ -105,6 +109,8 @@ class AppDatabase {
           FOREIGN KEY(ProductID) REFERENCES Product(ProductID)
         )
         ''');
+
+        await _createVendorGroupTable(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 3) {
@@ -127,10 +133,101 @@ class AppDatabase {
                 'ALTER TABLE Customer ADD COLUMN IsNarcotics INTEGER DEFAULT 0');
           } catch (_) {}
         }
+
+        if (oldVersion < 6) {
+          // Who took the transaction (salesman). Older rows stay NULL.
+          for (final col in ['UserID', 'UserName']) {
+            try {
+              await db.execute(
+                  'ALTER TABLE "Transaction" ADD COLUMN $col TEXT');
+            } catch (_) {}
+          }
+        }
+
+        if (oldVersion < 5) {
+          try {
+            await db.execute(
+                'ALTER TABLE "Transaction" ADD COLUMN VendorGroupID INTEGER');
+          } catch (_) {}
+          await _createVendorGroupTable(db);
+        }
       },
     );
 
     return _db!;
+  }
+
+  static Future<void> _createVendorGroupTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS VendorGroup(
+        VendorGroupID INTEGER PRIMARY KEY,
+        Name TEXT
+      )
+    ''');
+  }
+
+  // ================= VENDOR GROUPS =================
+  /// Replaces the cached list with what the server returned.
+  static Future<void> replaceVendorGroups(
+      List<Map<String, dynamic>> groups) async {
+    final db = await init();
+    await db.transaction((txn) async {
+      await txn.delete('VendorGroup');
+      for (final g in groups) {
+        await txn.insert('VendorGroup', g);
+      }
+    });
+  }
+
+  static Future<List<Map<String, dynamic>>> getVendorGroups() async {
+    final db = await init();
+    return db.query('VendorGroup', orderBy: 'Name');
+  }
+
+  // ================= BULK UPSERTS (refresh) =================
+  // One transaction + one batch for the whole list. Insert-or-ignore then
+  // update: works on old Android SQLite and never deletes a row that
+  // transactions reference.
+  static Future<void> upsertCustomers(
+      List<Map<String, dynamic>> customers) async {
+    final db = await init();
+    await db.transaction((txn) async {
+      final batch = txn.batch();
+      for (final c in customers) {
+        final row = {
+          'Name': c['customerName'],
+          'Address': c['address'] ?? '',
+          'Town': c['townID']?.toString() ?? '',
+          'IsNarcotics': c['isNarcoticsAllowed'] == true ? 1 : 0,
+        };
+        batch.insert('Customer', {'CustomerID': c['customerId'], ...row},
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+        batch.update('Customer', row,
+            where: 'CustomerID = ?', whereArgs: [c['customerId']]);
+      }
+      await batch.commit(noResult: true);
+    });
+  }
+
+  static Future<void> upsertProducts(List<Map<String, dynamic>> products) async {
+    final db = await init();
+    await db.transaction((txn) async {
+      final batch = txn.batch();
+      for (final p in products) {
+        final row = {
+          'Name': p['Name'],
+          'Code': p['Code'],
+          'ProductType': p['ProductType'] ?? 'Medicine',
+          'UnitPrice': (p['UnitPrice'] ?? 0.0).toDouble(),
+          'AvailableQty': p['AvailableQty'] ?? 0,
+        };
+        batch.insert('Product', {'ProductID': p['ProductID'], ...row},
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+        batch.update('Product', row,
+            where: 'ProductID = ?', whereArgs: [p['ProductID']]);
+      }
+      await batch.commit(noResult: true);
+    });
   }
 
   // ================= CUSTOMER UPSERT =================
@@ -285,15 +382,7 @@ class AppDatabase {
   }
 
   // ---------------------- HELPERS ----------------------
-  static Future<int> insertCustomerIfNotExists(String name,
-      {String? town}) async {
-    final db = await init();
-    final rows = await db.query('Customer',
-        where: 'Name = ?', whereArgs: [name], limit: 1);
-    if (rows.isNotEmpty) return rows.first['CustomerID'] as int;
-    return await db.insert('Customer', {'Name': name, 'Town': town ?? ''});
-  }
-
+  /// Fallback only, for lines without a ProductID (drafts saved by older versions).
   static Future<int> insertProductIfNotExists(String name,
       {double unitPrice = 0.0,
       int availableQty = 0,
@@ -316,14 +405,26 @@ class AppDatabase {
   // For example:
   // final unitPrice = ((d['unitPrice'] ?? 0.0) as num).toDouble();
 
+  // ================= OWNER (salesman) =================
+  /// Logged-in user's id; transactions are stamped with it and each user
+  /// only sees, edits and pushes their own (plus unstamped older rows).
+  static Future<String> currentUserId() async =>
+      (await SharedPreferences.getInstance()).getString('userId') ?? '';
+
+  static const _ownerFilter = '(UserID = ? OR UserID IS NULL)';
+
   static Future<int> createTransactionWithDetails({
     required int customerId,
     required String type, // 'Order'|'Return'|'Cash'|'Draft'
     required List<Map<String, dynamic>> details,
     double? cashAmount,
     String? remarks,
+    int? vendorGroupId, // Cash only
   }) async {
     final db = await init();
+    final prefs = await SharedPreferences.getInstance();
+    final userId = prefs.getString('userId') ?? '';
+    final userName = prefs.getString('username') ?? '';
 
     return await db.transaction((txn) async {
       double totalAmount = 0.0;
@@ -345,6 +446,9 @@ class AppDatabase {
         'TotalAmount': totalAmount,
         'CashAmount': cashAmount ?? 0.0,
         'Remarks': remarks ?? '',
+        'VendorGroupID': type == 'Cash' ? vendorGroupId : null,
+        'UserID': userId,
+        'UserName': userName,
         'SyncStatus': 'Pending',
         'CreatedAt': DateTime.now().toIso8601String(),
         'UpdatedAt': DateTime.now().toIso8601String(),
@@ -391,6 +495,7 @@ class AppDatabase {
     required List<Map<String, dynamic>> details,
     double? cashAmount,
     String? remarks,
+    int? vendorGroupId, // Cash only
   }) async {
     final db = await init();
 
@@ -415,6 +520,7 @@ class AppDatabase {
           'TotalAmount': totalAmount,
           'CashAmount': cashAmount ?? 0.0,
           'Remarks': remarks ?? '',
+          'VendorGroupID': type == 'Cash' ? vendorGroupId : null,
           'UpdatedAt': DateTime.now().toIso8601String(),
         },
         where: 'TransactionID = ?',
@@ -464,17 +570,32 @@ class AppDatabase {
         '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
     final rows = await db.query('"Transaction"',
         where:
-            'CustomerID = ? AND Type = ? AND date(Date) = ? AND SyncStatus != ?',
-        whereArgs: [customerId, type, dayStr, 'Synced'],
+            'CustomerID = ? AND Type = ? AND date(Date) = ? AND SyncStatus != ? AND $_ownerFilter',
+        whereArgs: [customerId, type, dayStr, 'Synced', await currentUserId()],
         limit: 1);
     if (rows.isNotEmpty) return rows.first['TransactionID'] as int;
     return null;
   }
 
+  /// The logged-in user's transactions (and unstamped older ones).
   static Future<List<Map<String, dynamic>>> getAllTransactionsForOverview(
       {int limit = 500}) async {
     final db = await init();
-    return await db.query('"Transaction"', orderBy: 'Date DESC', limit: limit);
+    return await db.query('"Transaction"',
+        where: _ownerFilter,
+        whereArgs: [await currentUserId()],
+        orderBy: 'Date DESC',
+        limit: limit);
+  }
+
+  /// IDs of the logged-in user's transactions waiting to be pushed.
+  static Future<List<int>> getUnsyncedTransactionIds() async {
+    final db = await init();
+    final rows = await db.query('"Transaction"',
+        columns: ['TransactionID'],
+        where: "SyncStatus IN ('Pending', 'Failed') AND $_ownerFilter",
+        whereArgs: [await currentUserId()]);
+    return rows.map((r) => r['TransactionID'] as int).toList();
   }
 
   static Future<List<Map<String, dynamic>>> getTransactionWithDetails(
@@ -482,7 +603,8 @@ class AppDatabase {
     final db = await init();
     final rows = await db.rawQuery('''
       SELECT t.TransactionID, t.CustomerID, t.Type, t.Date, t.TotalAmount, 
-             t.CashAmount, t.Remarks, t.SyncStatus, t.UpdatedAt,
+             t.CashAmount, t.Remarks, t.VendorGroupID, t.UserID, t.UserName,
+             t.SyncStatus, t.UpdatedAt,
              td.TransactionDetailID, td.ProductID, td.BatchNo, td.Qty, 
              td.UnitPrice, td.TotalPrice, p.Name AS ProductName
       FROM "Transaction" t
@@ -527,6 +649,20 @@ class AppDatabase {
           where: 'TransactionID = ?', whereArgs: [transactionId]);
       await txn.delete('"Transaction"',
           where: 'TransactionID = ?', whereArgs: [transactionId]);
+    });
+  }
+
+  /// Deletes the logged-in user's transactions only; other salesmen's
+  /// unpushed work, customers, products and settings stay.
+  static Future<void> clearTransactions() async {
+    final db = await init();
+    final me = await currentUserId();
+    await db.transaction((txn) async {
+      await txn.delete('TransactionDetail',
+          where: 'TransactionID IN (SELECT TransactionID FROM "Transaction" '
+              'WHERE $_ownerFilter)',
+          whereArgs: [me]);
+      await txn.delete('"Transaction"', where: _ownerFilter, whereArgs: [me]);
     });
   }
 

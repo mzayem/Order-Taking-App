@@ -7,6 +7,41 @@ import '../login_screen.dart';
 import '../main.dart' show navigatorKey;
 
 class ApiService {
+  static String _today() {
+    final d = DateTime.now();
+    return '${d.year}-${d.month}-${d.day}';
+  }
+
+  /// Auth headers plus If-None-Match, so an unchanged list comes back as an
+  /// empty 304. Skipped when the local table is empty (nothing to keep).
+  static Future<Map<String, String>> _withETag(
+      String key, String table) async {
+    final h = await headers();
+    final etag = (await SharedPreferences.getInstance()).getString(key);
+    if (etag == null) return h;
+    final db = await AppDatabase.init();
+    final hasRows =
+        (await db.rawQuery('SELECT 1 FROM $table LIMIT 1')).isNotEmpty;
+    if (hasRows) h['If-None-Match'] = etag;
+    return h;
+  }
+
+  static Future<void> _saveETag(String key, http.Response response) async {
+    final etag = response.headers['etag'];
+    final prefs = await SharedPreferences.getInstance();
+    if (etag != null && etag.isNotEmpty) {
+      await prefs.setString(key, etag);
+    } else {
+      await prefs.remove(key); // server without ETags: always download
+    }
+  }
+
+  /// True when customers/products have not been refreshed yet today.
+  static Future<bool> needsDailyRefresh() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('lastDataRefresh') != _today();
+  }
+
   /// -----------------------------
   /// AUTH HEADERS (token from login)
   /// -----------------------------
@@ -67,9 +102,10 @@ class ApiService {
 
       final url = Uri.parse('$baseUrl/api/Customer/customerFetch');
 
+      final etagKey = 'etag_customers_$userId'; // towns differ per user
       final response = await http.post(
         url,
-        headers: await headers(),
+        headers: await _withETag(etagKey, 'Customer'),
         body: jsonEncode({
           "userId": userId,
           "townIds": townIds.map(int.parse).toList(),
@@ -77,41 +113,34 @@ class ApiService {
       );
       await handleUnauthorized(response);
       print("Customer API Status = ${response.statusCode}");
-      print("Customer API Body = ${response.body}");
+
+      if (response.statusCode == 304) {
+        // Unchanged since the last download: local data is current.
+        await prefs.setString('lastDataRefresh', _today());
+        return await _customersFromDB();
+      }
+
       if (response.statusCode == 200) {
+        await _saveETag(etagKey, response);
         final data = jsonDecode(response.body);
 
         final List list = data['customers'] ?? [];
 
-        Set<String> customers = {};
+        // One batched write instead of a round trip per customer.
+        await AppDatabase.upsertCustomers(list
+            .map((c) => <String, dynamic>{
+                  'customerId': c['customerId'],
+                  'customerName': c['customerName'],
+                  'address': c['address'] ?? '',
+                  'townID': c['townID'],
+                  'isNarcoticsAllowed': c['isNarcoticsAllowed'] ?? false,
+                })
+            .toList());
 
-        for (var c in list) {
-          // print("API CUSTOMER => $c");
+        // Lets Home skip the next "first open of the day" refresh.
+        await prefs.setString('lastDataRefresh', _today());
 
-          customers.add(c['customerName'] ?? '');
-
-          await AppDatabase.upsertCustomer({
-            'customerId': c['customerId'],
-            'customerName': c['customerName'],
-            'address': c['address'] ?? '', // FIXED
-            'townID': c['townID'],
-            'isNarcoticsAllowed': c['isNarcoticsAllowed'] ?? false,
-          });
-
-          final db = await AppDatabase.init();
-
-          final row = await db.query(
-            'Customer',
-            where: 'CustomerID = ?',
-            whereArgs: [c['customerId']],
-          );
-
-          // if (row.isNotEmpty) {
-          //   print("DB CUSTOMER => ${row.first}");
-          // }
-        }
-
-        return customers.toList();
+        return list.map((c) => (c['customerName'] ?? '').toString()).toSet().toList();
       }
 
       return await _customersFromDB();
@@ -141,23 +170,28 @@ class ApiService {
 
       final url = Uri.parse('$baseUrl/api/Products/getProduct');
 
+      const etagKey = 'etag_products';
       final response = await http.post(
         url,
-        headers: await headers(),
+        headers: await _withETag(etagKey, 'Product'),
         body: jsonEncode({
           "userId": userId,
         }),
       );
       await handleUnauthorized(response);
 
+      if (response.statusCode == 304) {
+        return await _productsFromDB(); // unchanged: local data is current
+      }
+
       if (response.statusCode == 200) {
+        await _saveETag(etagKey, response);
         final data = jsonDecode(response.body);
 
         final List list = data['products'] ?? [];
 
         Map<String, Map<String, dynamic>> products = {};
 
-        // Product Type from API should be added like Narcotics || Medicine
         for (var p in list) {
           products[p['productName']] = {
             "name": p['productName'],
@@ -165,16 +199,19 @@ class ApiService {
             "type": p['productType'],
             "availableQty": p['totalQty']
           };
-
-          await AppDatabase.upsertProduct({
-            'ProductID': p['productId'],
-            'Name': p['productName'],
-            'Code': '', // why?
-            'UnitPrice': (p['latestPrice'] as num).toDouble(),
-            'AvailableQty': p['totalQty'],
-            'Type': p['productType'], // need to be added
-          });
         }
+
+        // One batched write instead of a round trip per product.
+        await AppDatabase.upsertProducts(list
+            .map((p) => <String, dynamic>{
+                  'ProductID': p['productId'],
+                  'Name': p['productName'],
+                  'Code': '',
+                  'UnitPrice': (p['latestPrice'] as num).toDouble(),
+                  'AvailableQty': p['totalQty'],
+                  'ProductType': p['productType'], // Medicine, Narcotics, ...
+                })
+            .toList());
 
         return products.values.toList();
       }
@@ -188,7 +225,7 @@ class ApiService {
   /// ------------------------------------------------------------------
   /// BUILD A SINGLE TRANSACTION PAYLOAD (shared helper)
   /// ------------------------------------------------------------------
-  static Future<Map<String, dynamic>?> _buildTransactionPayload(
+  static Future<Map<String, dynamic>?> buildTransactionPayload(
       int transactionId) async {
     final rows = await AppDatabase.getTransactionWithDetails(transactionId);
     if (rows.isEmpty) return null;
@@ -211,137 +248,195 @@ class ApiService {
       }
     }
 
+    // The day the transaction was taken, not the day it is uploaded.
+    final taken = DateTime.tryParse(header['Date'] as String? ?? '') ??
+        DateTime.now();
+
     return {
-      'clientId': transactionId.toString(), // local ID used for tracking
-      'date': DateTime.now().toUtc().toIso8601String(),
+      'clientId': transactionId, // local ID, echoed back in the results
+      'date': taken.toUtc().toIso8601String(),
       'customerId': header['CustomerID'] as int,
       'type': convertType(header['Type'] as String),
       'remarks': header['Remarks'] ?? '',
       'totalAmount': (header['TotalAmount'] as num?)?.toDouble() ?? 0.0,
+      if (header['VendorGroupID'] != null)
+        'vendorGroupId': header['VendorGroupID'],
       'transactionDetails': details,
     };
   }
 
-  /// ------------------------------------------------------------------
-  /// UPLOAD Multiple TRANSACTION
-  /// Wraps the transaction in the `data` array as required by the API.
-  /// ------------------------------------------------------------------
-  static Future<bool> uploadTransaction(int transactionId) async {
+  /// -----------------------------
+  /// VENDOR GROUPS (cached for offline Cash entry)
+  /// -----------------------------
+  /// Returns how many groups the server sent, or null when it couldn't be
+  /// reached (the cached list is kept).
+  static Future<int?> fetchVendorGroups() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final baseUrl = prefs.getString('baseUrl') ?? '';
-      final userId = (prefs.getString('userId') ?? '').trim();
+      if (baseUrl.isEmpty) return null;
 
-      if (userId.isEmpty || baseUrl.isEmpty) {
-        debugPrint('uploadTransaction: userId or baseUrl missing');
-        return false;
-      }
-
-      final payload = await _buildTransactionPayload(transactionId);
-      if (payload == null) {
-        debugPrint('uploadTransaction: no rows found for id $transactionId');
-        return false;
-      }
-
-      final body = {
-        'userId': userId,
-        'Data': [payload],
-      };
-
-      debugPrint('uploadTransaction BODY: ${jsonEncode(body)}');
-
-      final url = Uri.parse('$baseUrl/api/Transaction/createTransaction');
       final response = await http.post(
-        url,
+        Uri.parse('$baseUrl/api/VendorGroup/getVendorGroups'),
         headers: await headers(),
-        body: jsonEncode(body),
+        body: jsonEncode({'userId': prefs.getString('userId') ?? ''}),
       );
       await handleUnauthorized(response);
+      if (response.statusCode != 200) return null;
 
-      debugPrint('uploadTransaction STATUS: ${response.statusCode}');
-      debugPrint('uploadTransaction RESPONSE: ${response.body}');
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        await AppDatabase.markTransactionSynced(transactionId);
-        return true;
-      } else {
-        await AppDatabase.markTransactionFailed(transactionId);
-        return false;
-      }
+      final List list = jsonDecode(response.body)['vendorGroups'] ?? [];
+      await AppDatabase.replaceVendorGroups(list
+          .map((g) => <String, dynamic>{
+                'VendorGroupID': g['vendorGroupId'],
+                'Name': g['name'],
+              })
+          .toList());
+      return list.length;
     } catch (e) {
-      debugPrint('uploadTransaction ERROR: $e');
-      await AppDatabase.markTransactionFailed(transactionId);
-      return false;
+      debugPrint('fetchVendorGroups ERROR: $e'); // keep the cached list
+      return null;
+    }
+  }
+
+  /// -----------------------------
+  /// NOTIFICATIONS
+  /// -----------------------------
+  /// Returns {'unread': int, 'notifications': List} or null when offline.
+  static Future<Map<String, dynamic>?> fetchNotifications() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final baseUrl = prefs.getString('baseUrl') ?? '';
+      if (baseUrl.isEmpty) return null;
+
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/api/Notification/getNotifications'),
+            headers: await headers(),
+            body: jsonEncode({'userId': prefs.getString('userId') ?? ''}),
+          )
+          .timeout(const Duration(seconds: 15));
+      await handleUnauthorized(response);
+      if (response.statusCode != 200) return null;
+
+      final data = jsonDecode(response.body);
+      final List list = data['notifications'] ?? [];
+      return {
+        'unread': data['unread'] ?? list.where((n) => n['unread'] == true).length,
+        'notifications': list,
+      };
+    } catch (e) {
+      debugPrint('fetchNotifications ERROR: $e');
+      return null;
+    }
+  }
+
+  /// Marks one notification read, or all when [notificationId] is null.
+  static Future<void> markNotificationRead([int? notificationId]) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final baseUrl = prefs.getString('baseUrl') ?? '';
+      if (baseUrl.isEmpty) return;
+
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/Notification/markRead'),
+        headers: await headers(),
+        body: jsonEncode({
+          'userId': prefs.getString('userId') ?? '',
+          if (notificationId != null) 'notificationId': notificationId,
+        }),
+      );
+      await handleUnauthorized(response);
+    } catch (e) {
+      debugPrint('markNotificationRead ERROR: $e');
     }
   }
 
   /// ------------------------------------------------------------------
-  /// UPLOAD MULTIPLE TRANSACTIONS (Bulk)
+  /// UPLOAD TRANSACTIONS BY LOCAL ID
+  /// The API answers 200 (all ok), 207 (some failed) or 400 (all failed),
+  /// each with a `results` entry per transaction. Each local row is marked
+  /// from its own result. When no results come back (network error, 401,
+  /// 500) statuses are left unchanged so the rows can be retried.
+  ///
+  /// Returns {'ok': bool, 'message': String}.
   /// ------------------------------------------------------------------
-  static Future<Map<String, dynamic>> uploadTransactions({
-    required String baseUrl,
-    required String userId,
-    required List<Map<String, dynamic>> dataList,
-  }) async {
-    if (baseUrl.isEmpty) {
-      return {'ok': false, 'error': 'No API URL configured'};
+  static Future<Map<String, dynamic>> uploadTransactionIds(
+      List<int> ids) async {
+    final prefs = await SharedPreferences.getInstance();
+    final baseUrl = prefs.getString('baseUrl') ?? '';
+    final userId = (prefs.getString('userId') ?? '').trim();
+
+    if (baseUrl.isEmpty || userId.isEmpty) {
+      return {'ok': false, 'message': 'Base URL or User ID not configured'};
+    }
+
+    final dataList = <Map<String, dynamic>>[];
+    for (final id in ids) {
+      final payload = await buildTransactionPayload(id);
+      if (payload != null) dataList.add(payload);
     }
     if (dataList.isEmpty) {
-      return {'ok': false, 'error': 'No transactions to upload'};
+      return {'ok': false, 'message': 'No transactions to upload'};
     }
 
-    final url = Uri.parse('$baseUrl/api/Transaction/createTransaction');
-
-    final body = {
-      'userId': userId,
-      'data': dataList,
-    };
-
-    debugPrint('======= API REQUEST =======');
-    debugPrint('URL: $url');
-    debugPrint('BODY: ${jsonEncode(body)}');
-
+    final http.Response response;
     try {
-      final response = await http.post(
-        url,
+      response = await http.post(
+        Uri.parse('$baseUrl/api/Transaction/createTransaction'),
         headers: await headers(),
-        body: jsonEncode(body),
+        body: jsonEncode({'userId': userId, 'data': dataList}),
       );
-      await handleUnauthorized(response);
-
-      debugPrint('======= API RESPONSE =======');
-      debugPrint('STATUS: ${response.statusCode}');
-      debugPrint('BODY: ${response.body}');
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        final respJson =
-            response.body.isNotEmpty ? jsonDecode(response.body) : {};
-        return {'ok': true, 'data': respJson};
-      } else {
-        String errorMsg = response.body;
-        try {
-          final decoded = jsonDecode(response.body);
-          if (decoded is Map) {
-            errorMsg = (decoded['message'] ??
-                    decoded['error'] ??
-                    decoded['title'] ??
-                    decoded['errors']?.toString() ??
-                    errorMsg)
-                .toString();
-          }
-        } catch (_) {}
-
-        return {
-          'ok': false,
-          'error': 'HTTP ${response.statusCode}',
-          'response': errorMsg,
-        };
-      }
     } catch (e) {
-      debugPrint('======= API ERROR =======');
-      debugPrint(e.toString());
-      return {'ok': false, 'error': e.toString()};
+      debugPrint('upload ERROR: $e');
+      return {'ok': false, 'message': 'Unable to connect to server.'};
     }
+    await handleUnauthorized(response);
+
+    debugPrint('upload STATUS: ${response.statusCode}');
+    debugPrint('upload BODY: ${response.body}');
+
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(response.body);
+    } catch (_) {}
+
+    final results = decoded is Map ? decoded['results'] : null;
+    if (results is! List) {
+      final msg = decoded is Map ? decoded['message']?.toString() : null;
+      return {
+        'ok': false,
+        'message': msg ?? 'Upload failed (HTTP ${response.statusCode})',
+      };
+    }
+
+    int synced = 0;
+    final failures = <String>[];
+    for (final r in results) {
+      final clientId = int.tryParse('${r['clientId']}');
+      if (clientId == null) continue;
+      if (r['success'] == true) {
+        await AppDatabase.markTransactionSynced(clientId,
+            remoteId: int.tryParse('${r['serverId']}'));
+        synced++;
+      } else {
+        await AppDatabase.markTransactionFailed(clientId);
+        failures.add('#$clientId: ${r['message'] ?? 'failed'}');
+      }
+    }
+
+    if (failures.isEmpty) {
+      return {
+        'ok': true,
+        'synced': synced,
+        'message': 'Uploaded $synced transaction(s)',
+      };
+    }
+    return {
+      'ok': false,
+      'synced': synced,
+      'message':
+          'Uploaded $synced, failed ${failures.length}\n${failures.join('\n')}',
+    };
   }
 
   /// -----------------------------
@@ -372,7 +467,8 @@ class ApiService {
           "id": id,
           "name": name,
           "price": (r['UnitPrice'] as num).toDouble(),
-          "availableQty": r['AvailableQty']
+          "availableQty": r['AvailableQty'],
+          "type": r['ProductType'],
         };
       }
     }
@@ -450,72 +546,15 @@ class ApiService {
     }
   }
 
+  /// Uploads everything not yet synced, including earlier failures.
   static Future<Map<String, dynamic>> syncAllTransactions() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final baseUrl = prefs.getString('baseUrl') ?? '';
-      final userId = (prefs.getString('userId') ?? '').trim();
+    // Only the logged-in salesman's work: never push another user's orders.
+    final ids = await AppDatabase.getUnsyncedTransactionIds();
 
-      if (baseUrl.isEmpty || userId.isEmpty) {
-        return {'ok': false, 'error': 'Base URL or User ID not configured'};
-      }
-
-      final db = await AppDatabase.init();
-      final pendingTransactions = await db.query(
-        '"Transaction"',
-        where: 'SyncStatus = ?',
-        whereArgs: ['Pending'],
-      );
-
-      if (pendingTransactions.isEmpty) {
-        return {'ok': true, 'message': 'Everything is already synced.'};
-      }
-
-      final dataList = <Map<String, dynamic>>[];
-      final txIds = <int>[];
-
-      for (var tx in pendingTransactions) {
-        int transactionId = tx['TransactionID'] as int;
-        final payload = await _buildTransactionPayload(transactionId);
-        if (payload != null) {
-          dataList.add(payload);
-          txIds.add(transactionId);
-        }
-      }
-
-      if (dataList.isEmpty) {
-        return {
-          'ok': false,
-          'error': 'Could not build payload for pending transactions'
-        };
-      }
-
-      final result = await uploadTransactions(
-        baseUrl: baseUrl,
-        userId: userId,
-        dataList: dataList,
-      );
-
-      if (result['ok'] == true) {
-        for (var id in txIds) {
-          await AppDatabase.markTransactionSynced(id);
-        }
-        final Map<String, dynamic> data = result['data'] ?? {};
-        String msg = 'Successfully synced ${txIds.length} transactions';
-        if (data.containsKey('message')) {
-          msg = data['message'].toString();
-        } else if (data.containsKey('response')) {
-          msg = data['response'].toString();
-        }
-        return {'ok': true, 'message': msg};
-      } else {
-        for (var id in txIds) {
-          await AppDatabase.markTransactionFailed(id);
-        }
-        return result;
-      }
-    } catch (e) {
-      return {'ok': false, 'error': e.toString()};
+    if (ids.isEmpty) {
+      return {'ok': true, 'message': 'Everything is already synced.'};
     }
+
+    return uploadTransactionIds(ids);
   }
 }

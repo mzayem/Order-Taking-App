@@ -25,11 +25,14 @@ class _CashScreenState extends State<CashScreen> {
   final FocusNode _amountFocusNode = FocusNode();
 
   String? _selectedCustomer;
+  int? _selectedCustomerId;
+  int? _selectedVendorGroupId; // optional; null = ungrouped payment
+  List<Map<String, dynamic>> _vendorGroups = [];
   bool _isSaving = false;
   bool _isLoading = false;
   bool _isLoadingData = true;
 
-  List<String> _customers = [];
+  final List<String> _customers = [];
   List<Map<String, dynamic>> _customersMap = [];
   double customerBalance = 0.0;
   bool isBalanceLoading = false;
@@ -43,6 +46,7 @@ class _CashScreenState extends State<CashScreen> {
   Future<void> _loadInitialData() async {
     setState(() => _isLoadingData = true);
     await _fetchCustomers();
+    _vendorGroups = await AppDatabase.getVendorGroups();
     if (widget.transactionId != null) {
       await _loadExisting(widget.transactionId!);
     }
@@ -133,6 +137,7 @@ class _CashScreenState extends State<CashScreen> {
             where: 'CustomerID = ?', whereArgs: [custId], limit: 1);
         if (custRows.isNotEmpty) {
           _selectedCustomer = custRows.first['Name'] as String?;
+          _selectedCustomerId = custId;
           _fetchCustomerBalance(custId);
         }
       }
@@ -140,6 +145,7 @@ class _CashScreenState extends State<CashScreen> {
       final cash = (header['CashAmount'] ?? 0.0) as num;
       _amountController.text = cash.toString();
       _remarksController.text = (header['Remarks'] ?? '') as String;
+      _selectedVendorGroupId = header['VendorGroupID'] as int?;
     } catch (e) {
       debugPrint('Error loading cash transaction: $e');
     } finally {
@@ -149,7 +155,7 @@ class _CashScreenState extends State<CashScreen> {
 
   Future<void> _saveCashPayment() async {
     if (!_formKey.currentState!.validate()) return;
-    if (_selectedCustomer == null || _selectedCustomer!.isEmpty) {
+    if (_selectedCustomerId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Please select a customer")),
       );
@@ -159,8 +165,7 @@ class _CashScreenState extends State<CashScreen> {
     setState(() => _isSaving = true);
 
     try {
-      final customerId =
-          await AppDatabase.insertCustomerIfNotExists(_selectedCustomer!);
+      final customerId = _selectedCustomerId!;
       final cashAmount = double.tryParse(_amountController.text.trim()) ?? 0.0;
 
       if (widget.transactionId != null) {
@@ -171,6 +176,7 @@ class _CashScreenState extends State<CashScreen> {
           details: const [],
           cashAmount: cashAmount,
           remarks: _remarksController.text.trim(),
+          vendorGroupId: _selectedVendorGroupId,
         );
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -192,6 +198,7 @@ class _CashScreenState extends State<CashScreen> {
             details: const [],
             cashAmount: cashAmount,
             remarks: _remarksController.text.trim(),
+            vendorGroupId: _selectedVendorGroupId,
           );
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
@@ -203,6 +210,7 @@ class _CashScreenState extends State<CashScreen> {
             details: const [],
             cashAmount: cashAmount,
             remarks: _remarksController.text.trim(),
+            vendorGroupId: _selectedVendorGroupId,
           );
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
@@ -213,8 +221,10 @@ class _CashScreenState extends State<CashScreen> {
       if (!mounted) return;
       setState(() {
         _selectedCustomer = null;
+        _selectedCustomerId = null;
         _amountController.clear();
         _remarksController.clear();
+        _selectedVendorGroupId = null;
       });
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -385,6 +395,7 @@ class _CashScreenState extends State<CashScreen> {
                   onSelected: (selection) {
                     setState(() {
                       _selectedCustomer = selection['name']?.toString() ?? '';
+                      _selectedCustomerId = selection['id'] as int?;
                     });
 
                     _fetchCustomerBalance(selection['id']);
@@ -428,7 +439,34 @@ class _CashScreenState extends State<CashScreen> {
                     return null;
                   },
                 ),
-                const SizedBox(height: 30),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<int?>(
+                  value: _vendorGroups.any(
+                          (g) => g['VendorGroupID'] == _selectedVendorGroupId)
+                      ? _selectedVendorGroupId
+                      : null,
+                  isExpanded: true,
+                  decoration: inputDecoration("Vendor Group (optional)"),
+                  items: [
+                    const DropdownMenuItem<int?>(
+                        value: null, child: Text("No vendor group")),
+                    for (final g in _vendorGroups)
+                      DropdownMenuItem<int?>(
+                        value: g['VendorGroupID'] as int,
+                        child: Text(g['Name']?.toString() ?? ''),
+                      ),
+                  ],
+                  onChanged: (v) => setState(() => _selectedVendorGroupId = v),
+                ),
+                const SizedBox(height: 10),
+                TextFormField(
+                  controller: _remarksController,
+                  maxLength: 200, // matches the server's Remarks limit
+                  maxLines: 2,
+                  textInputAction: TextInputAction.done,
+                  decoration: inputDecoration("Remarks (optional)"),
+                ),
+                const SizedBox(height: 20),
                 if (_selectedCustomer != null && _selectedCustomer!.isNotEmpty)
                   Align(
                     alignment: Alignment.centerLeft,

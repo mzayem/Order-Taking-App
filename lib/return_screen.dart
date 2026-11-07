@@ -108,6 +108,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
                 if (mounted) {
                   setState(() {
                     selectedCustomer = null;
+                    selectedCustomerObj = null;
                     selectedProduct = null;
 
                     selectedProducts.clear();
@@ -132,6 +133,9 @@ class _ReturnScreenState extends State<ReturnScreen> {
               onPressed: () {
                 setState(() {
                   selectedCustomer = draft["customer"];
+                  selectedCustomerObj = draft["customerObj"] == null
+                      ? null
+                      : Map<String, dynamic>.from(draft["customerObj"]);
 
                   selectedProducts =
                       List<Map<String, dynamic>>.from(draft["products"] ?? []);
@@ -217,7 +221,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
           unique[name] = {
             'id': id,
             'name': name,
-            'price': (r['UnitPrice'] as num).toInt(),
+            'price': (r['UnitPrice'] as num).toDouble(),
             'availableQty': r['AvailableQty'] as int,
           };
         }
@@ -246,16 +250,21 @@ class _ReturnScreenState extends State<ReturnScreen> {
           where: 'CustomerID = ?', whereArgs: [header['CustomerID']], limit: 1);
       if (custRows.isNotEmpty) {
         selectedCustomer = custRows.first['Name'] as String;
+        selectedCustomerObj = {
+          'id': header['CustomerID'],
+          'name': selectedCustomer,
+        };
       }
       remarksController.text = header['Remarks'] ?? '';
       final loaded = <Map<String, dynamic>>[];
       for (var r in rows) {
         if (r['TransactionDetailID'] != null) {
           loaded.add({
+            'id': r['ProductID'],
             'name': r['ProductName'] as String,
             'qty': (r['Qty'] as num).toInt(),
             'batch': r['BatchNo'] as String? ?? '',
-            'price': (r['UnitPrice'] as num).toInt(),
+            'price': (r['UnitPrice'] as num).toDouble(),
           });
         }
       }
@@ -268,7 +277,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
   }
 
   Future<void> addProduct() async {
-    if (selectedCustomer == null) {
+    if (selectedCustomerObj?['id'] == null) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Please select a customer")));
       return;
@@ -301,31 +310,8 @@ class _ReturnScreenState extends State<ReturnScreen> {
     setState(() => _isCheckingBatch = true);
 
     try {
-      final db = await AppDatabase.init();
-
-      final productName = selectedProduct!['name'] as String;
-
-      // Resolve ProductID
-      final prodRows = await db.query(
-        'Product',
-        where: 'Name = ?',
-        whereArgs: [productName],
-        limit: 1,
-      );
-
-      final productId =
-          prodRows.isNotEmpty ? (prodRows.first['ProductID'] as int) : 0;
-
-      // Resolve CustomerID
-      final custRows = await db.query(
-        'Customer',
-        where: 'Name = ?',
-        whereArgs: [selectedCustomer!],
-        limit: 1,
-      );
-
-      final customerId =
-          custRows.isNotEmpty ? (custRows.first['CustomerID'] as int) : 0;
+      final productId = selectedProduct!['id'] as int;
+      final customerId = selectedCustomerObj!['id'] as int;
 
       final result = await ApiService.checkBatch(
         productId: productId,
@@ -365,6 +351,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
         if (index != -1) {
           // UPDATE existing product + batch
           selectedProducts[index] = {
+            "id": selectedProduct!['id'],
             "name": productName,
             "qty": qty,
             "batch": batchText,
@@ -373,6 +360,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
         } else {
           // ADD new product + batch
           selectedProducts.add({
+            "id": selectedProduct!['id'],
             "name": productName,
             "qty": qty,
             "batch": batchText,
@@ -446,6 +434,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
                   /// NEW RETURN → clear form
                   setState(() {
                     selectedCustomer = null;
+                    selectedCustomerObj = null;
                     selectedProduct = null;
                     qtyController.clear();
                     batchController.clear();
@@ -466,7 +455,8 @@ class _ReturnScreenState extends State<ReturnScreen> {
   }
 
   Future<void> saveAs(String type) async {
-    if (selectedCustomer == null) {
+    final custId = selectedCustomerObj?['id'] as int?;
+    if (custId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Please select customer")));
       return;
@@ -481,17 +471,15 @@ class _ReturnScreenState extends State<ReturnScreen> {
     setState(() => _isSaving = true);
 
     try {
-      final custId =
-          await AppDatabase.insertCustomerIfNotExists(selectedCustomer!);
-
       final details = <Map<String, dynamic>>[];
 
       for (var p in selectedProducts) {
-        final prodId = await AppDatabase.insertProductIfNotExists(
-          p['name'],
-          unitPrice: (p['price'] as num).toDouble(),
-          availableQty: 0,
-        );
+        final prodId = p['id'] as int? ??
+            await AppDatabase.insertProductIfNotExists(
+              p['name'],
+              unitPrice: (p['price'] as num).toDouble(),
+              availableQty: 0,
+            );
 
         details.add({
           'productId': prodId,
@@ -578,6 +566,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
       if (mounted) {
         setState(() {
           selectedCustomer = null;
+          selectedCustomerObj = null;
           selectedProduct = null;
 
           qtyController.clear();

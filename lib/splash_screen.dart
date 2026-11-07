@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:dmc/db/database.dart';
 import 'package:dmc/url_setup.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -49,6 +50,14 @@ class _SplashscreenState extends State<Splashscreen>
     if (!isUrlSaved) {
       Navigator.pushReplacement(
           context, MaterialPageRoute(builder: (_) => const UrlSetupScreen()));
+    } else if (await AppDatabase.isLicenseExpired()) {
+      // Saving the URL again fetches a fresh licence.
+      if (!mounted) return;
+      Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+              builder: (_) => const UrlSetupScreen(
+                  message: "License expired. Tap Save to renew it.")));
     } else if (isLoggedIn.isNotEmpty) {
       Navigator.pushReplacement(
           context, MaterialPageRoute(builder: (_) => const HomeScreen()));

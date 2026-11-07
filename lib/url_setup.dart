@@ -7,7 +7,9 @@ import 'login_screen.dart';
 import '../db/database.dart';
 
 class UrlSetupScreen extends StatefulWidget {
-  const UrlSetupScreen({super.key});
+  /// Shown on open, e.g. when the licence has expired.
+  final String? message;
+  const UrlSetupScreen({super.key, this.message});
 
   @override
   State<UrlSetupScreen> createState() => _UrlSetupScreenState();
@@ -17,6 +19,18 @@ class _UrlSetupScreenState extends State<UrlSetupScreen> {
   final TextEditingController urlController = TextEditingController();
   bool isLoading = false;
 
+  @override
+  void initState() {
+    super.initState();
+    SharedPreferences.getInstance().then((prefs) {
+      urlController.text = prefs.getString('baseUrl') ?? '';
+    });
+    if (widget.message != null) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _showMessage(widget.message!));
+    }
+  }
+
   Future<void> saveUrl() async {
     String url = urlController.text.trim();
 
@@ -25,22 +39,20 @@ class _UrlSetupScreenState extends State<UrlSetupScreen> {
       return;
     }
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('isUrlSaved', true);
-    await prefs.setString('baseUrl', url);
 
     /// 🔹 ADD http automatically if user didn't type it
     if (!url.startsWith("http://") && !url.startsWith("https://")) {
       url = "http://$url";
     }
 
-    final cleanUrl = url.endsWith('/') ? url.substring(0, url.length - 1) : url;
+    final cleanUrl = url.replaceAll(RegExp(r'/+$'), '');
 
     setState(() => isLoading = true);
 
     try {
       /// 🔹 STEP 1: GET SETTINGS
       final settingRes = await http
-          .get(Uri.parse("$url/api/Setting"))
+          .get(Uri.parse("$cleanUrl/api/Setting"))
           .timeout(const Duration(seconds: 10));
 
       print("TEST STATUS: ${settingRes.statusCode}");
@@ -98,6 +110,10 @@ class _UrlSetupScreenState extends State<UrlSetupScreen> {
         signature: signature,
         expDate: expDate,
       );
+
+      // Saved only once the server and licence are confirmed.
+      await prefs.setString('baseUrl', cleanUrl);
+      await prefs.setBool('isUrlSaved', true);
 
       if (!mounted) return;
 

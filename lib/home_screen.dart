@@ -8,6 +8,8 @@ import 'order_screen.dart';
 import 'cash_screen.dart';
 import 'return_screen.dart';
 import 'profile_screen.dart';
+import 'notification_screen.dart';
+import 'services/local_notifier.dart';
 
 // Local database + Sync
 import '../db/database.dart';
@@ -81,7 +83,7 @@ class _HomeScreenState extends State<HomeScreen> {
         uniqueProducts[name] = {
           'id': id,
           'name': name,
-          'price': ((r['UnitPrice'] as num?)?.toInt() ?? 0),
+          'price': ((r['UnitPrice'] as num?)?.toDouble() ?? 0.0),
           'availableQty': (r['AvailableQty'] as int?) ?? 0,
           'type': r['ProductType']?.toString() ?? 'Medicine',
         };
@@ -146,7 +148,8 @@ class OverviewScreen extends StatefulWidget {
   State<OverviewScreen> createState() => _OverviewScreenState();
 }
 
-class _OverviewScreenState extends State<OverviewScreen> {
+class _OverviewScreenState extends State<OverviewScreen>
+    with WidgetsBindingObserver {
   String selectedFilter = "All";
   bool _selectionMode = false;
   bool _isUploading = false;
@@ -155,6 +158,13 @@ class _OverviewScreenState extends State<OverviewScreen> {
   bool _isInit = true;
   bool _isOnline = true;
   Timer? _connectivityTimer;
+  int _unreadNotifications = 0;
+  DateTime? _lastNotificationCheck;
+
+  /// No polling: notifications are checked on open, on return to the app,
+  /// when the connection comes back, and on Refresh — at most this often
+  /// unless the user asks.
+  static const _notificationCheckGap = Duration(minutes: 5);
   final Set<int> _selectedTxIds = {};
   List<Map<String, dynamic>> _transactions = [];
 
@@ -166,6 +176,36 @@ class _OverviewScreenState extends State<OverviewScreen> {
     _checkConnectivity();
     _connectivityTimer = Timer.periodic(
         const Duration(seconds: 10), (_) => _checkConnectivity());
+    WidgetsBinding.instance.addObserver(this);
+    _checkNotifications(force: true);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkNotifications();
+      _refreshIfNewDay(); // app left open overnight
+    }
+  }
+
+  /// Updates the bell badge and rings for anything new. Offline: no change.
+  Future<void> _checkNotifications({bool force = false}) async {
+    final last = _lastNotificationCheck;
+    if (!force &&
+        last != null &&
+        DateTime.now().difference(last) < _notificationCheckGap) {
+      return;
+    }
+    _lastNotificationCheck = DateTime.now();
+
+    final res = await ApiService.fetchNotifications();
+    if (res == null) {
+      _lastNotificationCheck = last; // failed: allow the next trigger to retry
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _unreadNotifications = res['unread'] as int? ?? 0);
+    await LocalNotifier.alertNew(res['notifications'] as List);
   }
 
   Future<void> _checkConnectivity() async {
@@ -179,6 +219,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
       online = false;
     }
     if (mounted && _isOnline != online) {
+      if (online) _checkNotifications(); // back online
       setState(() {
         _isOnline = online;
       });
@@ -188,6 +229,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
   @override
   void dispose() {
     _connectivityTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -197,11 +239,21 @@ class _OverviewScreenState extends State<OverviewScreen> {
 
     if (_isInit) {
       _isInit = false;
-
-      Future.microtask(() async {
-        await _fetchCustomersAndProducts();
-      });
+      Future.microtask(_refreshIfNewDay);
     }
+  }
+
+  /// Customers/products/stock are downloaded on the first open of the day
+  /// (and after every push), not on every app open.
+  Future<void> _refreshIfNewDay() async {
+    if (await ApiService.needsDailyRefresh()) {
+      await _fetchCustomersAndProducts();
+    }
+  }
+
+  /// After a push the server's stock and balances have changed.
+  Future<void> _refreshAfterPush(Map<String, dynamic> res) async {
+    if ((res['synced'] as int? ?? 0) > 0) await _fetchCustomersAndProducts();
   }
 
   // Status Tracking: 0 = Loading, 1 = Success, -1 = Error, null = Not Started
@@ -209,6 +261,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
     BuildContext context,
     ValueNotifier<int?> customerStatus,
     ValueNotifier<int?> productStatus,
+    ValueNotifier<int?> vendorGroupStatus,
     ValueNotifier<String?> errorMessage,
   ) {
     showDialog(
@@ -247,6 +300,14 @@ class _OverviewScreenState extends State<OverviewScreen> {
                           return _buildSyncRow("Fetch Products", status);
                         },
                       ),
+                      const SizedBox(height: 16),
+                      // Vendor Groups Row
+                      ValueListenableBuilder<int?>(
+                        valueListenable: vendorGroupStatus,
+                        builder: (context, status, child) {
+                          return _buildSyncRow("Fetch Vendor Groups", status);
+                        },
+                      ),
                       if (errorTxt != null) ...[
                         const SizedBox(height: 20),
                         Container(
@@ -276,24 +337,25 @@ class _OverviewScreenState extends State<OverviewScreen> {
                   );
                 }),
             actions: [
-              ValueListenableBuilder<int?>(
-                  valueListenable: customerStatus,
-                  builder: (context, custStatus, _) {
-                    return ValueListenableBuilder<int?>(
-                        valueListenable: productStatus,
-                        builder: (context, prodStatus, _) {
-                          final isDone = (custStatus != 0 && prodStatus != 0) &&
-                              (custStatus != null && prodStatus != null);
-                          if (!isDone) return const SizedBox.shrink();
+              // Close appears once all three steps have finished.
+              ListenableBuilder(
+                  listenable: Listenable.merge(
+                      [customerStatus, productStatus, vendorGroupStatus]),
+                  builder: (context, _) {
+                    final isDone = [
+                      customerStatus.value,
+                      productStatus.value,
+                      vendorGroupStatus.value,
+                    ].every((s) => s != null && s != 0);
+                    if (!isDone) return const SizedBox.shrink();
 
-                          return TextButton(
-                            onPressed: () => Navigator.pop(context),
-                            child: const Text("Close",
-                                style: TextStyle(
-                                    color: Colors.teal,
-                                    fontWeight: FontWeight.bold)),
-                          );
-                        });
+                    return TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text("Close",
+                          style: TextStyle(
+                              color: Colors.teal,
+                              fontWeight: FontWeight.bold)),
+                    );
                   })
             ],
           ),
@@ -353,10 +415,12 @@ class _OverviewScreenState extends State<OverviewScreen> {
   Future<void> _fetchCustomersAndProducts({bool showDialog = false}) async {
     final customerStatus = ValueNotifier<int?>(0);
     final productStatus = ValueNotifier<int?>(0);
+    final vendorGroupStatus = ValueNotifier<int?>(0);
     final errorMessage = ValueNotifier<String?>(null);
 
     if (mounted && showDialog) {
-      _showSyncDialog(context, customerStatus, productStatus, errorMessage);
+      _showSyncDialog(context, customerStatus, productStatus,
+          vendorGroupStatus, errorMessage);
     }
 
     /// ------------------- CUSTOMERS -------------------
@@ -389,6 +453,17 @@ class _OverviewScreenState extends State<OverviewScreen> {
       productStatus.value = -1;
       errorMessage.value ??= "Product fetch error";
       debugPrint("Product API error: $e");
+    }
+
+    /// ------------------- VENDOR GROUPS (Cash screen) -------------------
+    // Zero groups is fine (not every company uses them); only "unreachable"
+    // is a failure, and then the cached list is kept.
+    final groups = await ApiService.fetchVendorGroups();
+    if (groups != null) {
+      vendorGroupStatus.value = 1;
+    } else {
+      vendorGroupStatus.value = -1;
+      errorMessage.value ??= "Vendor group fetch error";
     }
 
     /// Refresh local DB → UI
@@ -597,152 +672,12 @@ class _OverviewScreenState extends State<OverviewScreen> {
       _uploadProgress = 0.0;
     });
 
-    final userId = (prefs.getString('userId') ?? '').trim();
-
-    if (baseUrl.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('API URL not configured')),
-      );
-      setState(() => _isUploading = false);
-      return;
+    final res = await ApiService.uploadTransactionIds(validIdsToUpload);
+    if (mounted) {
+      UiUtils.showBeautifulSnackBar(context, res['message'].toString(),
+          isSuccess: res['ok'] == true);
     }
-
-    if (userId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('User ID not found')),
-      );
-      setState(() => _isUploading = false);
-      return;
-    }
-
-    // Build the `data` array — one entry per selected transaction
-    final List<Map<String, dynamic>> dataList = [];
-
-    for (final id in validIdsToUpload) {
-      final rows = await AppDatabase.getTransactionWithDetails(id);
-      if (rows.isEmpty) continue;
-
-      final header = rows.first;
-
-      final List<Map<String, dynamic>> details = [];
-      for (final r in rows) {
-        if (r['TransactionDetailID'] != null) {
-          final unitPrice = (r['UnitPrice'] as num?)?.toDouble() ?? 0.0;
-          final qty = (r['Qty'] as num?)?.toInt() ?? 0;
-          details.add({
-            'productId': r['ProductID'],
-            'batchNo': r['BatchNo'] ?? '',
-            'qty': qty,
-            'unitPrice': unitPrice,
-            'totalAmount':
-                (r['TotalPrice'] as num?)?.toDouble() ?? unitPrice * qty,
-          });
-        }
-      }
-
-      int typeValue = 0;
-      if (header['Type'] == 'Cash') {
-        typeValue = 1;
-      } else if (header['Type'] == 'Return') {
-        typeValue = 2;
-      }
-
-      dataList.add({
-        'clientId': id.toString(), // local TransactionID for tracking
-        'date': header['Date'] ?? DateTime.now().toUtc().toIso8601String(),
-        'customerId': header['CustomerID'],
-        'type': typeValue,
-        'remarks': header['Remarks'] ?? '',
-        'totalAmount': (header['TotalAmount'] as num?)?.toDouble() ?? 0.0,
-        'transactionDetails': details,
-      });
-    }
-
-    if (dataList.isEmpty) {
-      setState(() => _isUploading = false);
-      return;
-    }
-
-    final syncRes = await ApiService.uploadTransactions(
-      baseUrl: baseUrl,
-      userId: userId,
-      dataList: dataList,
-    );
-
-    if (syncRes['ok'] == true) {
-      final Map<dynamic, dynamic> data = syncRes['data'] ?? {};
-
-      if (data['status'] == 'completed' && data['results'] != null) {
-        final List<dynamic> results = data['results'];
-        List<String> failedIds = [];
-
-        for (var result in results) {
-          int clientId = -1;
-          if (result['clientId'] is int) {
-            clientId = result['clientId'];
-          } else {
-            clientId = int.tryParse(result['clientId'].toString()) ?? -1;
-          }
-
-          bool success = result['success'] == true;
-
-          if (success) {
-            await AppDatabase.markTransactionSynced(clientId);
-          } else {
-            await AppDatabase.markTransactionFailed(clientId);
-            failedIds.add(clientId.toString());
-          }
-        }
-
-        if (failedIds.isNotEmpty) {
-          if (mounted) {
-            UiUtils.showBeautifulSnackBar(
-                context, 'Failed transactions: ${failedIds.join(", ")}',
-                isSuccess: false);
-          }
-        }
-      } else {
-        for (final id in validIdsToUpload) {
-          await AppDatabase.markTransactionSynced(id);
-        }
-      }
-    } else {
-      for (final id in validIdsToUpload) {
-        await AppDatabase.markTransactionFailed(id);
-      }
-      debugPrint('Upload failed: ${syncRes['error']}');
-      debugPrint('API response: ${syncRes['response']}');
-
-      String errorMsg = '${syncRes['error']}';
-      if (syncRes['response'] != null &&
-          syncRes['response'].toString().isNotEmpty) {
-        try {
-          final decoded = jsonDecode(syncRes['response'].toString());
-          if (decoded is Map<String, dynamic>) {
-            final status = decoded['status'];
-            final results = decoded['results'];
-            String? message;
-            if (results is List && results.isNotEmpty) {
-              message = results[0]['message']?.toString();
-            }
-            if (status != null && message != null) {
-              errorMsg = 'Status: $status, Message: $message';
-            } else if (status != null) {
-              errorMsg = 'Status: $status';
-            } else {
-              errorMsg += ' - ${syncRes['response']}';
-            }
-          } else {
-            errorMsg += ' - ${syncRes['response']}';
-          }
-        } catch (e) {
-          errorMsg += ' - ${syncRes['response']}';
-        }
-      }
-      if (mounted) {
-        UiUtils.showBeautifulSnackBar(context, errorMsg, isSuccess: false);
-      }
-    }
+    await _refreshAfterPush(res);
 
     await _loadTransactions();
 
@@ -770,78 +705,83 @@ class _OverviewScreenState extends State<OverviewScreen> {
       return;
     }
 
+    // Same payload the upload sends, so the file matches what the server gets.
     final List<Map<String, dynamic>> dataList = [];
-
     for (final id in ids) {
-      final rows = await AppDatabase.getTransactionWithDetails(id);
-      if (rows.isEmpty) continue;
-
-      final header = rows.first;
-      final List<Map<String, dynamic>> details = [];
-      for (final r in rows) {
-        if (r['TransactionDetailID'] != null) {
-          final unitPrice = (r['UnitPrice'] as num?)?.toDouble() ?? 0.0;
-          final qty = (r['Qty'] as num?)?.toInt() ?? 0;
-          details.add({
-            'productId': r['ProductID'],
-            'batchNo': r['BatchNo'] ?? '',
-            'qty': qty,
-            'unitPrice': unitPrice,
-            'totalAmount':
-                (r['TotalPrice'] as num?)?.toDouble() ?? unitPrice * qty,
-          });
-        }
-      }
-
-      int typeValue = 0;
-      if (header['Type'] == 'Cash') {
-        typeValue = 1;
-      } else if (header['Type'] == 'Return') {
-        typeValue = 2;
-      }
-
-      dataList.add({
-        'clientId': id.toString(),
-        'date': header['Date'] ?? DateTime.now().toUtc().toIso8601String(),
-        'customerId': header['CustomerID'],
-        'type': typeValue,
-        'remarks': header['Remarks'] ?? '',
-        'totalAmount': (header['TotalAmount'] as num?)?.toDouble() ?? 0.0,
-        'transactionDetails': details,
-      });
+      final payload = await ApiService.buildTransactionPayload(id);
+      if (payload != null) dataList.add(payload);
     }
 
     if (dataList.isEmpty) return;
 
+    final vendorGroupNames = {
+      for (final g in await AppDatabase.getVendorGroups())
+        g['VendorGroupID']: g['Name']?.toString() ?? '',
+    };
+
+    // Salesman who took each transaction. Rows from before this was recorded
+    // fall back to the logged-in user (the only user whose rows are listed).
+    final prefs = await SharedPreferences.getInstance();
+    final meId = prefs.getString('userId') ?? '';
+    final meName = prefs.getString('username') ?? '';
+    final ownerRows = await (await AppDatabase.init()).query('"Transaction"',
+        columns: ['TransactionID', 'UserID', 'UserName'],
+        where: 'TransactionID IN (${List.filled(ids.length, '?').join(',')})',
+        whereArgs: ids);
+    final owners = {
+      for (final r in ownerRows)
+        r['TransactionID']: (
+          (r['UserID'] as String?)?.isNotEmpty == true ? r['UserID'] : meId,
+          (r['UserID'] as String?)?.isNotEmpty == true ? r['UserName'] : meName,
+        ),
+    };
+
+    // Quotes a value when it holds a comma, quote or line break (standard CSV).
+    String csv(Object? v) {
+      final s = (v ?? '').toString();
+      return RegExp(r'[",\r\n]').hasMatch(s)
+          ? '"${s.replaceAll('"', '""')}"'
+          : s;
+    }
+
     final StringBuffer csvData = StringBuffer();
+    // New columns go at the end so the older column positions don't move.
     csvData.writeln(
-        "clientId,date,customerId,type,remarks,totalAmount,productId,batchNo,qty,unitPrice,detailTotalAmount");
+        "clientId,date,customerId,type,remarks,totalAmount,productId,batchNo,qty,unitPrice,detailTotalAmount,vendorGroupId,vendorGroupName,userId,userName");
 
     for (final data in dataList) {
-      final clientId = data['clientId'];
-      final date = data['date'];
-      final customerId = data['customerId'];
-      final type = data['type'];
-      final remarks =
-          data['remarks'].toString().replaceAll(',', ' ').replaceAll('\n', ' ');
-      final totalAmount = data['totalAmount'];
+      // Local time for people reading the sheet; the upload itself sends UTC.
+      final date = DateTime.parse(data['date']).toLocal().toIso8601String();
+      final vendorGroupId = data['vendorGroupId'];
+      final head = [
+        data['clientId'],
+        date,
+        data['customerId'],
+        data['type'],
+        data['remarks'],
+        data['totalAmount'],
+      ].map(csv).join(',');
+      final owner = owners[data['clientId']] ?? (meId, meName);
+      final tail = [
+        vendorGroupId,
+        vendorGroupNames[vendorGroupId],
+        owner.$1,
+        owner.$2,
+      ].map(csv).join(',');
 
       final details = data['transactionDetails'] as List;
       if (details.isEmpty) {
-        csvData.writeln(
-            "$clientId,$date,$customerId,$type,$remarks,$totalAmount,,,,,");
+        csvData.writeln("$head,,,,,,$tail");
       } else {
-        for (final detail in details) {
-          final productId = detail['productId'];
-          final batchNo = detail['batchNo']
-              .toString()
-              .replaceAll(',', ' ')
-              .replaceAll('\n', ' ');
-          final qty = detail['qty'];
-          final unitPrice = detail['unitPrice'];
-          final detailTotalAmount = detail['totalAmount'];
-          csvData.writeln(
-              "$clientId,$date,$customerId,$type,$remarks,$totalAmount,$productId,$batchNo,$qty,$unitPrice,$detailTotalAmount");
+        for (final d in details) {
+          final line = [
+            d['productId'],
+            d['batchNo'],
+            d['qty'],
+            d['unitPrice'],
+            d['totalAmount'],
+          ].map(csv).join(',');
+          csvData.writeln("$head,$line,$tail");
         }
       }
     }
@@ -950,7 +890,8 @@ class _OverviewScreenState extends State<OverviewScreen> {
         borderRadius: BorderRadius.circular(18),
         child: Container(
           decoration: BoxDecoration(
-            color: isSelected ? Colors.teal.withOpacity(0.08) : Colors.white,
+            color:
+                isSelected ? Colors.teal.withValues(alpha: 0.08) : Colors.white,
             borderRadius: BorderRadius.circular(18),
             border:
                 isSelected ? Border.all(color: Colors.teal, width: 2) : null,
@@ -1098,8 +1039,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
                         ),
                       ),
                       onPressed: () async {
-                        await AppDatabase.deleteDatabaseFile();
-                        await AppDatabase.init();
+                        await AppDatabase.clearTransactions();
                         await _loadTransactions();
 
                         Navigator.pop(context);
@@ -1474,9 +1414,9 @@ class _OverviewScreenState extends State<OverviewScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
+            const Text(
               "Softifex",
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 20,
                 fontWeight: FontWeight.w800,
                 letterSpacing: 0.5,
@@ -1487,8 +1427,8 @@ class _OverviewScreenState extends State<OverviewScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               decoration: BoxDecoration(
                 color: _isOnline
-                    ? Colors.green.withOpacity(0.2)
-                    : Colors.red.withOpacity(0.2),
+                    ? Colors.green.withValues(alpha: 0.2)
+                    : Colors.red.withValues(alpha: 0.2),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Row(
@@ -1519,6 +1459,25 @@ class _OverviewScreenState extends State<OverviewScreen> {
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         actions: [
+          if (!_selectionMode)
+            IconButton(
+              tooltip: "Notifications",
+              icon: Badge(
+                isLabelVisible: _unreadNotifications > 0,
+                label: Text('$_unreadNotifications'),
+                child: const Icon(Icons.notifications),
+              ),
+              onPressed: () async {
+                // The screen returns its unread count: no extra API call.
+                final unread = await Navigator.push<int>(
+                  context,
+                  MaterialPageRoute(builder: (_) => const NotificationScreen()),
+                );
+                if (unread != null && mounted) {
+                  setState(() => _unreadNotifications = unread);
+                }
+              },
+            ),
           if (!_selectionMode)
             IconButton(
               icon: const Icon(Icons.chevron_left),
@@ -1564,6 +1523,7 @@ class _OverviewScreenState extends State<OverviewScreen> {
               tooltip: "Refresh Data",
               onPressed: () {
                 _fetchCustomersAndProducts(showDialog: true);
+                _checkNotifications(force: true);
               },
             ),
 
@@ -1629,18 +1589,13 @@ class _OverviewScreenState extends State<OverviewScreen> {
                 if (mounted) Navigator.pop(context);
 
                 if (mounted) {
-                  if (result['ok'] == true) {
-                    UiUtils.showBeautifulSnackBar(context,
-                        result['message']?.toString() ?? 'Sync successful',
-                        isSuccess: true);
-                  } else {
-                    UiUtils.showBeautifulSnackBar(
-                        context, result['error']?.toString() ?? 'Sync failed',
-                        isSuccess: false);
-                  }
+                  UiUtils.showBeautifulSnackBar(
+                      context, result['message']?.toString() ?? 'Sync failed',
+                      isSuccess: result['ok'] == true);
                 }
 
                 _loadTransactions();
+                await _refreshAfterPush(result);
               },
             ),
 
