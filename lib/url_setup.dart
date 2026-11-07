@@ -20,6 +20,7 @@ class UrlSetupScreen extends StatefulWidget {
 
 class _UrlSetupScreenState extends State<UrlSetupScreen> {
   final TextEditingController urlController = TextEditingController();
+  final TextEditingController portController = TextEditingController();
   bool isLoading = false;
   bool _useIp = false; // tab: false = web address, true = IP address
 
@@ -31,12 +32,15 @@ class _UrlSetupScreenState extends State<UrlSetupScreen> {
     super.initState();
     SharedPreferences.getInstance().then((prefs) {
       final saved = prefs.getString('baseUrl') ?? '';
-      final bare = saved.replaceFirst(RegExp(r'^https?://'), '');
-      if (!mounted) return;
+      final uri = Uri.tryParse(saved);
+      if (!mounted || uri == null || uri.host.isEmpty) return;
       setState(() {
-        _useIp = _ipLike.hasMatch(bare);
-        // The IP tab shows just ip:port; the URL tab shows the full address.
-        urlController.text = _useIp ? bare : saved;
+        _useIp = _ipLike.hasMatch(uri.host);
+        // Host and port go in their own fields. Plain http on the IP tab is
+        // implied, so only an https scheme is kept in the text.
+        final keepScheme = uri.scheme == 'https' || !_useIp;
+        urlController.text = keepScheme ? '${uri.scheme}://${uri.host}' : uri.host;
+        portController.text = uri.hasPort ? '${uri.port}' : '';
       });
     });
     if (widget.message != null) {
@@ -47,25 +51,33 @@ class _UrlSetupScreenState extends State<UrlSetupScreen> {
 
   Future<void> saveUrl() async {
     String url = urlController.text.trim();
-
     if (url.isEmpty) {
       _showMessage("Please enter API URL");
       return;
     }
     final prefs = await SharedPreferences.getInstance();
 
-    /// 🔹 ADD http automatically if user didn't type it
-    // A bare address is tried over secure https first; plain http is only the
-    // fallback for servers that do not have a certificate yet.
+    // Optional port, from its own field (unless the host already carries one).
+    // It is added to the host part only, before any "/path".
+    final port = portController.text.trim();
     var typedScheme = url.startsWith("http://") || url.startsWith("https://");
-    // A bare IP (192.168.1.2:2000) has no certificate, so it is plain http
-    // straight away, whichever tab it was typed in.
-    final bare = url.replaceFirst(RegExp(r'^https?://'), '');
-    if (_useIp || _ipLike.hasMatch(bare)) {
-      url = "http://$bare";
-      typedScheme = true; // no https attempt
-    } else if (!typedScheme) {
-      url = "https://$url";
+    final rest = url.replaceFirst(RegExp(r'^https?://'), '');
+    var host = rest.split('/').first;
+    final path = rest.substring(host.length);
+    if (port.isNotEmpty && !host.contains(':')) host = "$host:$port";
+    final scheme = url.startsWith("https://") ? "https" : "http";
+
+    /// 🔹 Which scheme to use
+    // IP addresses (typed on the IP tab, or recognised anywhere) are plain
+    // http unless https was typed: they rarely have a certificate. A web
+    // address with no scheme is tried over https first, then http.
+    if (_useIp || _ipLike.hasMatch(host)) {
+      url = "$scheme://$host$path";
+      typedScheme = true; // no second attempt
+    } else if (typedScheme) {
+      url = "$scheme://$host$path";
+    } else {
+      url = "https://$host$path";
     }
 
     // Tolerate a trailing slash (or several) and a pasted "/api" suffix.
@@ -182,6 +194,7 @@ class _UrlSetupScreenState extends State<UrlSetupScreen> {
   @override
   void dispose() {
     urlController.dispose();
+    portController.dispose();
     super.dispose();
   }
 
@@ -202,20 +215,46 @@ class _UrlSetupScreenState extends State<UrlSetupScreen> {
               onChanged: (ip) => setState(() {
                 _useIp = ip;
                 urlController.clear();
+                portController.clear();
               }),
             ),
             const SizedBox(height: 20),
-            TextField(
-              controller: urlController,
-              keyboardType: _useIp
-                  ? const TextInputType.numberWithOptions(decimal: true)
-                  : TextInputType.url,
-              decoration: InputDecoration(
-                labelText: _useIp ? "IP address and port" : "Enter API URL",
-                hintText: _useIp ? "192.168.1.2:2000" : "api.mycompany.com",
-                border: const OutlineInputBorder(),
-                prefixIcon: Icon(_useIp ? Icons.lan_outlined : Icons.link),
-              ),
+            // Address + optional port, on both tabs: static domains and static
+            // IPs often run on their own port. (A number keypad has no ":" key,
+            // so the port gets its own field.)
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: TextField(
+                    controller: urlController,
+                    keyboardType: _useIp
+                        ? const TextInputType.numberWithOptions(decimal: true)
+                        : TextInputType.url,
+                    decoration: InputDecoration(
+                      labelText: _useIp ? "IP address" : "API URL",
+                      hintText: _useIp ? "192.168.1.2" : "api.mycompany.com",
+                      border: const OutlineInputBorder(),
+                      prefixIcon:
+                          Icon(_useIp ? Icons.lan_outlined : Icons.link),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: TextField(
+                    controller: portController,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: "Port (optional)",
+                      hintText: "2001",
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 20),
             ElevatedButton(
