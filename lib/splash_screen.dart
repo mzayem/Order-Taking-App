@@ -8,6 +8,9 @@ import 'package:dmc/widgets/brand_logo.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:dmc/biometric_lock_screen.dart';
+import 'package:dmc/services/biometric_login.dart';
+import 'package:dmc/services/session_policy.dart';
 import 'login_screen.dart';
 import 'home_screen.dart';
 
@@ -76,7 +79,21 @@ class _SplashscreenState extends State<Splashscreen>
       return const UrlSetupScreen(
           message: "License expired. Tap Save to renew it.");
     }
-    if (isLoggedIn.isNotEmpty) return const HomeScreen();
+    if (isLoggedIn.isNotEmpty) {
+      // Every 30 days the password is needed again (the token is refreshed
+      // by signing in), and fingerprint / face is switched off until then.
+      if (await SessionPolicy.passwordLoginDue()) {
+        await SessionPolicy.clearSession(forgetBiometric: true);
+        return const LoginScreen(
+            message: 'Please sign in with your password to continue.');
+      }
+      // With fingerprint / face login on, every fresh app start is locked.
+      if (await BiometricLogin.isAvailable() &&
+          await BiometricLogin.isEnabled()) {
+        return const BiometricLockScreen();
+      }
+      return const HomeScreen();
+    }
     return const LoginScreen();
   }
 

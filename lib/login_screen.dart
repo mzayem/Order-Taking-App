@@ -6,12 +6,17 @@ import 'package:dmc/widgets/app_toast.dart';
 import 'package:dmc/theme/app_theme.dart';
 import 'package:dmc/widgets/brand_logo.dart';
 import 'package:dmc/services/app_log.dart';
+import 'package:dmc/services/biometric_login.dart';
+import 'package:dmc/services/session_policy.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  const LoginScreen({super.key, this.message});
+
+  /// Shown once on arrival, e.g. why the user has to sign in again.
+  final String? message;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -23,10 +28,76 @@ class _LoginScreenState extends State<LoginScreen> {
 
   bool isPasswordVisible = false;
   bool isLoggingIn = false;
+  bool _bioReady = false; // fingerprint / face login is switched on
 
-  Future<void> _performLogin() async {
-    final username = emailController.text.trim();
-    final password = passwordController.text.trim();
+  @override
+  void initState() {
+    super.initState();
+    _initBiometric();
+    if (widget.message != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          AppToast.show(context, widget.message!, type: ToastType.info);
+        }
+      });
+    }
+  }
+
+  Future<void> _initBiometric() async {
+    final ready = await BiometricLogin.isAvailable() &&
+        await BiometricLogin.isEnabled();
+    if (!mounted) return;
+    setState(() => _bioReady = ready);
+    if (ready) _biometricLogin(); // prompt straight away
+  }
+
+  Future<void> _biometricLogin() async {
+    if (isLoggingIn) return;
+    final saved = await BiometricLogin.authenticate();
+    if (saved == null || !mounted) return; // cancelled: type the password
+    emailController.text = saved.username;
+    await _performLogin(
+        username: saved.username, password: saved.password, viaBiometric: true);
+  }
+
+  /// Offered once after a normal login, if the phone supports it.
+  Future<void> _offerBiometric(String username, String password) async {
+    if (!await BiometricLogin.isAvailable()) return;
+    final prefs = await SharedPreferences.getInstance();
+
+    if (await BiometricLogin.isEnabled()) {
+      // Keep the saved password current if it was changed.
+      await BiometricLogin.enable(username, password);
+      return;
+    }
+    if (prefs.getBool('bioAsked') == true || !mounted) return;
+    await prefs.setBool('bioAsked', true);
+
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: Icon(Icons.fingerprint, size: 40, color: AppColors.brand),
+        title: const Text('Sign in faster?'),
+        content: const Text(
+            'Use your fingerprint or face to sign in next time, instead of '
+            'typing your password. You can turn this off in Profile.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Not now')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Enable')),
+        ],
+      ),
+    );
+    if (yes == true) await BiometricLogin.enable(username, password);
+  }
+
+  Future<void> _performLogin(
+      {String? username, String? password, bool viaBiometric = false}) async {
+    username ??= emailController.text.trim();
+    password ??= passwordController.text.trim();
 
     if (username.isEmpty || password.isEmpty) {
       _showMessage("Enter username and password");
@@ -102,6 +173,13 @@ class _LoginScreenState extends State<LoginScreen> {
         AppLog.info(LogCategory.auth, 'Signed in: $username');
         if (!mounted) return;
 
+        // A typed password (not a fingerprint) restarts the 30-day clock.
+        if (!viaBiometric) {
+          await SessionPolicy.markPasswordLogin();
+          await _offerBiometric(username, password);
+        }
+        if (!mounted) return;
+
         AppToast.show(context, "Login Successful", type: ToastType.success);
 
         Navigator.pushReplacement(
@@ -120,6 +198,11 @@ class _LoginScreenState extends State<LoginScreen> {
       if (data.containsKey('message') &&
           data['message'] != null &&
           data['message'].toString().isNotEmpty) {
+        // Saved password no longer accepted (changed on the server).
+        if (viaBiometric && response.statusCode < 500) {
+          await BiometricLogin.disable();
+          if (mounted) setState(() => _bioReady = false);
+        }
         _showMessage(data['message']);
         return;
       }
@@ -277,6 +360,20 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                   ),
                 ),
+                if (_bioReady) ...[
+                  const SizedBox(height: 16),
+                  OutlinedButton.icon(
+                    onPressed: isLoggingIn ? null : _biometricLogin,
+                    icon: const Icon(Icons.fingerprint, size: 26),
+                    label: const Text('Use fingerprint / face'),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(48),
+                      foregroundColor: AppColors.brand,
+                      side: BorderSide(
+                          color: AppColors.brand.withValues(alpha: 0.6)),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

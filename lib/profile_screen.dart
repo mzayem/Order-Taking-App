@@ -5,6 +5,7 @@ import 'package:dmc/about_screen.dart';
 import 'package:dmc/activity_screen.dart';
 import 'package:dmc/insights_screen.dart';
 import 'package:dmc/services/app_log.dart';
+import 'package:dmc/services/biometric_login.dart';
 import 'package:dmc/settings_screen.dart';
 import 'package:dmc/theme/app_theme.dart';
 import 'package:dmc/theme/theme_controller.dart';
@@ -23,11 +24,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String _username = "Loading...";
   String _town = "Loading...";
   bool _loaded = false;
+  bool _bioEnabled = false;
 
   @override
   void initState() {
     super.initState();
     _loadUserData();
+    BiometricLogin.isEnabled().then((v) {
+      if (mounted) setState(() => _bioEnabled = v);
+    });
   }
 
   Future<void> _loadUserData() async {
@@ -154,6 +159,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
 
                   const SizedBox(height: 16),
+
+                  // Fingerprint / face sign-in: turned on from the login
+                  // screen (needs the password), turned off here.
+                  if (_bioEnabled) ...[
+                    Card(
+                      clipBehavior: Clip.antiAlias,
+                      child: SwitchListTile(
+                        secondary:
+                            Icon(Icons.fingerprint, color: AppColors.brand),
+                        title: const Text("Fingerprint / face login"),
+                        subtitle: const Text("Sign in without typing your password"),
+                        value: true,
+                        onChanged: (_) async {
+                          await BiometricLogin.disable();
+                          if (mounted) setState(() => _bioEnabled = false);
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
 
                   // Appearance (like the ERP's light / dark / system setting)
                   ListenableBuilder(

@@ -74,3 +74,25 @@ flutter {
 dependencies {
     coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.4"
 }
+
+// Also saves every release APK as softifex-booking-v<version>-<build>.apk
+// (version 1.0.1+2 -> softifex-booking-v1-0-1-2.apk) next to app-release.apk.
+// The version comes from pubspec.yaml, so bump it there before each release.
+afterEvaluate {
+    tasks.matching { it.name == "assembleRelease" }.configureEach { task ->
+        task.doLast {
+            def tag = "${android.defaultConfig.versionName}-${android.defaultConfig.versionCode}"
+                    .replace('.', '-')
+            def outDir = new File(rootProject.projectDir.parentFile, "build/app/outputs/flutter-apk")
+            outDir.mkdirs()
+            def built = new File(project.layout.buildDirectory.get().asFile, "outputs/apk/release/app-release.apk")
+            if (built.exists()) {
+                copy {
+                    from built
+                    into outDir
+                    rename { "softifex-booking-v${tag}.apk" }
+                }
+            }
+        }
+    }
+}

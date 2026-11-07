@@ -1420,31 +1420,96 @@ class _OverviewScreenState extends State<OverviewScreen>
               },
             ),
 
-          /// Select All Button (only when selecting)
+          /// Select-all ring (only when selecting): shows how much of the
+          /// list is picked; tap to pick everything, tap again to clear.
           if (_selectionMode)
-            // Tonal pill: readable on light and dark app bars.
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4),
-              child: ElevatedButton.icon(
-                onPressed: () {
-                  setState(() {
-                    _selectedTxIds
-                        .addAll(filtered.map((t) => t['transactionId'] as int));
-                  });
-                },
-                // Same raised look as every other button, in pill shape.
-                style: AppButtons.primarySoft.merge(ElevatedButton.styleFrom(
-                  minimumSize: const Size(0, 36),
-                  visualDensity: VisualDensity.compact,
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  shape: const StadiumBorder(),
-                )),
-                icon: const Icon(Icons.select_all_rounded, size: 18),
-                label: Text(
-                  "All (${_selectedTxIds.length})",
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-              ),
+              child: Builder(builder: (context) {
+                final ids =
+                    filtered.map((t) => t['transactionId'] as int).toSet();
+                final picked = ids.intersection(_selectedTxIds).length;
+                final all = ids.isNotEmpty && picked == ids.length;
+                return Tooltip(
+                  message: all ? 'Clear selection' : 'Select all',
+                  child: InkWell(
+                    customBorder: const StadiumBorder(),
+                    onTap: () => setState(() {
+                      if (all) {
+                        _selectedTxIds.removeAll(ids);
+                      } else {
+                        _selectedTxIds.addAll(ids);
+                      }
+                    }),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 250),
+                      curve: Curves.easeOut,
+                      padding: const EdgeInsets.fromLTRB(6, 6, 14, 6),
+                      decoration: ShapeDecoration(
+                        shape: const StadiumBorder(),
+                        color: all
+                            ? AppColors.brand
+                            : AppColors.brand.withValues(alpha: 0.12),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(
+                            width: 28,
+                            height: 28,
+                            child: Stack(
+                              alignment: Alignment.center,
+                              children: [
+                                TweenAnimationBuilder<double>(
+                                  tween: Tween(
+                                      end: ids.isEmpty
+                                          ? 0
+                                          : picked / ids.length),
+                                  duration: const Duration(milliseconds: 300),
+                                  curve: Curves.easeOut,
+                                  builder: (_, v, __) =>
+                                      CircularProgressIndicator(
+                                    value: v,
+                                    strokeWidth: 3,
+                                    backgroundColor: (all
+                                            ? AppColors.onBrand
+                                            : AppColors.brand)
+                                        .withValues(alpha: 0.2),
+                                    color: all
+                                        ? AppColors.onBrand
+                                        : AppColors.brand,
+                                  ),
+                                ),
+                                AnimatedSwitcher(
+                                  duration: const Duration(milliseconds: 200),
+                                  child: Icon(
+                                    all ? Icons.check_rounded : Icons.add_task,
+                                    key: ValueKey(all),
+                                    size: 15,
+                                    color: all
+                                        ? AppColors.onBrand
+                                        : AppColors.brand,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            '$picked / ${ids.length}',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                              color:
+                                  all ? AppColors.onBrand : AppColors.brand,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              }),
             ),
 
           /// Sync Button (only when not selecting)
