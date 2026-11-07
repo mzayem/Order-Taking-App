@@ -40,7 +40,8 @@ class _SplashscreenState extends State<Splashscreen>
     final prefs = await SharedPreferences.getInstance();
     final isUrlSaved = prefs.getBool('isUrlSaved') ?? false;
     // final isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
-    final isLoggedIn = prefs.getString('userId') ?? "";
+    // Token, not userId: devices logged in before the token update log in once more.
+    final isLoggedIn = prefs.getString('token') ?? "";
 
     await Future.delayed(const Duration(milliseconds: 600));
     if (!mounted) return;

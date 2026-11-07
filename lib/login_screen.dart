@@ -82,6 +82,7 @@ class _LoginScreenState extends State<LoginScreen> {
         }
 
         await prefs.setString("userId", userId);
+        await prefs.setString("token", data['token'] ?? "");
         await prefs.setString("username", data['username'] ?? "");
 
         List towns = data['towns'] ?? [];

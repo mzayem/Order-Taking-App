@@ -2,6 +2,9 @@ import 'package:dmc/db/database.dart';
 import 'package:dmc/splash_screen.dart';
 import 'package:flutter/material.dart';
 
+// Lets non-widget code (ApiService) send the user to Login when the session expires.
+final navigatorKey = GlobalKey<NavigatorState>();
+
 // http://app.dmcgroup.pk:2004
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,6 +20,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'DMC App',
+      navigatorKey: navigatorKey,
       debugShowCheckedModeBanner: false,
       theme: ThemeData(primarySwatch: Colors.teal),
       home: const Splashscreen(),

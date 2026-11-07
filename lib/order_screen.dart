@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:sqflite/sqflite.dart';
 import 'dart:convert';
 import '../db/database.dart';
+import 'services/api_service.dart';
 import 'home_screen.dart';
 
 class OrderScreen extends StatefulWidget {
@@ -244,15 +245,13 @@ class _OrderScreenState extends State<OrderScreen> with WidgetsBindingObserver {
     try {
       final response = await http.post(
         Uri.parse('$baseUrl/api/Customer/balanceFetch'),
-        headers: {
-          "accept": "*/*",
-          "Content-Type": "application/json",
-        },
+        headers: await ApiService.headers(),
         body: jsonEncode({
           "userId": userId,
           "customerId": customerId,
         }),
       );
+      await ApiService.handleUnauthorized(response);
 
       print("BALANCE API STATUS: ${response.statusCode}");
       print("BALANCE API BODY: ${response.body}");

@@ -3,8 +3,36 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../db/database.dart';
+import '../login_screen.dart';
+import '../main.dart' show navigatorKey;
 
 class ApiService {
+  /// -----------------------------
+  /// AUTH HEADERS (token from login)
+  /// -----------------------------
+  static Future<Map<String, String>> headers() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('token') ?? '';
+    return {
+      'accept': '*/*',
+      'Content-Type': 'application/json',
+      if (token.isNotEmpty) 'Authorization': 'Bearer $token',
+    };
+  }
+
+  /// Session expired or revoked (password reset / user blocked): drop the
+  /// session and go to Login. Local transactions are kept for upload later.
+  static Future<void> handleUnauthorized(http.Response response) async {
+    if (response.statusCode != 401) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('token');
+    await prefs.remove('userId');
+    navigatorKey.currentState?.pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (_) => false,
+    );
+  }
+
   /// -----------------------------
   /// CONVERT LOCAL TYPE → API TYPE
   /// -----------------------------
@@ -32,7 +60,6 @@ class ApiService {
       final userId = prefs.getString('userId') ?? '';
       final townIds = prefs.getStringList('townIds') ?? [];
       print("baseUrl = $baseUrl");
-      print("userId = $userId");
       print("townIds = $townIds");
       if (baseUrl.isEmpty || userId.isEmpty || townIds.isEmpty) {
         return await _customersFromDB();
@@ -42,12 +69,13 @@ class ApiService {
 
       final response = await http.post(
         url,
-        headers: {"Content-Type": "application/json"},
+        headers: await headers(),
         body: jsonEncode({
           "userId": userId,
           "townIds": townIds.map(int.parse).toList(),
         }),
       );
+      await handleUnauthorized(response);
       print("Customer API Status = ${response.statusCode}");
       print("Customer API Body = ${response.body}");
       if (response.statusCode == 200) {
@@ -115,11 +143,12 @@ class ApiService {
 
       final response = await http.post(
         url,
-        headers: {"Content-Type": "application/json"},
+        headers: await headers(),
         body: jsonEncode({
           "userId": userId,
         }),
       );
+      await handleUnauthorized(response);
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -203,8 +232,6 @@ class ApiService {
       final baseUrl = prefs.getString('baseUrl') ?? '';
       final userId = (prefs.getString('userId') ?? '').trim();
 
-      debugPrint('uploadTransaction – userId: $userId');
-
       if (userId.isEmpty || baseUrl.isEmpty) {
         debugPrint('uploadTransaction: userId or baseUrl missing');
         return false;
@@ -226,9 +253,10 @@ class ApiService {
       final url = Uri.parse('$baseUrl/api/Transaction/createTransaction');
       final response = await http.post(
         url,
-        headers: {'accept': '*/*', 'Content-Type': 'application/json'},
+        headers: await headers(),
         body: jsonEncode(body),
       );
+      await handleUnauthorized(response);
 
       debugPrint('uploadTransaction STATUS: ${response.statusCode}');
       debugPrint('uploadTransaction RESPONSE: ${response.body}');
@@ -276,12 +304,10 @@ class ApiService {
     try {
       final response = await http.post(
         url,
-        headers: {
-          'accept': '*/*',
-          'Content-Type': 'application/json',
-        },
+        headers: await headers(),
         body: jsonEncode(body),
       );
+      await handleUnauthorized(response);
 
       debugPrint('======= API RESPONSE =======');
       debugPrint('STATUS: ${response.statusCode}');
@@ -388,9 +414,10 @@ class ApiService {
 
       final response = await http.post(
         url,
-        headers: {'accept': '*/*', 'Content-Type': 'application/json'},
+        headers: await headers(),
         body: jsonEncode(body),
       );
+      await handleUnauthorized(response);
 
       debugPrint('checkBatch STATUS: ${response.statusCode}');
       debugPrint('checkBatch RESPONSE: ${response.body}');

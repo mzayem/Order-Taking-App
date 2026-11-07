@@ -84,15 +84,13 @@ class _CashScreenState extends State<CashScreen> {
     try {
       final response = await http.post(
         Uri.parse('$baseUrl/api/Customer/balanceFetch'),
-        headers: {
-          "accept": "*/*",
-          "Content-Type": "application/json",
-        },
+        headers: await ApiService.headers(),
         body: jsonEncode({
           "userId": userId,
           "customerId": customerId,
         }),
       );
+      await ApiService.handleUnauthorized(response);
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
